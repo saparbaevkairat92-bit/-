@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -5,7 +6,15 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # Database
+    # Railway выдаёт DATABASE_URL с префиксом postgresql://, подменяем на asyncpg
     database_url: str = "postgresql+asyncpg://kaspi_user:kaspi_pass@localhost:5432/kaspi_subs"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def fix_async_driver(cls, v: str) -> str:
+        if v.startswith("postgresql://") or v.startswith("postgres://"):
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1).replace("postgres://", "postgresql+asyncpg://", 1)
+        return v
 
     # Service
     admin_api_key: str = "change-me-admin-secret"
