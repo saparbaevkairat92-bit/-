@@ -19,11 +19,30 @@ class Settings(BaseSettings):
     # Service
     admin_api_key: str = "change-me-admin-secret"
 
-    # Kaspi Pay
-    kaspi_base_url: str = "https://kaspi.kz/online/api"
-    kaspi_merchant_id: str = ""
-    kaspi_api_token: str = ""
+    # ── Способ приёма оплаты ─────────────────────────────────────────────────
+    # "unique_amount" — кассир/бот: ссылка Kaspi + уникальная сумма, детект по сумме
+    # "aggregator"    — сторонний REST API (apipay.kz и т.п.) с webhook
+    # "manual"        — клиент переводит и указывает код, admin подтверждает
+    payment_provider: str = "unique_amount"
+
+    # Реквизиты получателя (для комментария/инструкции клиенту)
+    kaspi_receiver_phone: str = "+77001234567"
+    kaspi_receiver_name: str = "Имя Фамилия"
+
+    # ── unique_amount ────────────────────────────────────────────────────────
+    # Статическая ссылка кассира Kaspi: https://pay.kaspi.kz/pay/XXXXX
+    kaspi_payment_link: str = ""
+    # Максимальная надбавка к базовой сумме для уникальности (в тенге)
+    unique_amount_max_offset: int = 300
+
+    # ── aggregator (опционально) ─────────────────────────────────────────────
+    aggregator_base_url: str = ""
+    aggregator_api_key: str = ""
+    # Секрет, которым агрегатор подписывает входящие webhook (HMAC-SHA256)
     kaspi_webhook_secret: str = ""
+
+    # Срок жизни выставленного счёта (после — expired), часов
+    invoice_ttl_hours: int = 48
 
     # Billing
     billing_days_before_renewal: int = 3

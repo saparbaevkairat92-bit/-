@@ -17,3 +17,12 @@ def verify_api_key(api_key: str, stored_hash: str) -> bool:
 
 def generate_webhook_secret() -> str:
     return secrets.token_hex(32)
+
+
+# Алфавит без похожих символов (0/O, 1/I/L) чтобы клиент не ошибся при вводе
+_REF_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def generate_reference_code(length: int = 6) -> str:
+    """Короткий человекочитаемый код для комментария к переводу: напр. 'K7M2QD'."""
+    return "".join(secrets.choice(_REF_ALPHABET) for _ in range(length))

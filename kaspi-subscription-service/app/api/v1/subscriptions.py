@@ -94,32 +94,23 @@ async def get_current_invoice(
     if not sub or sub.project_id != project.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscription not found")
 
-    if not sub.current_invoice_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No pending invoice")
-
+    # Берём последний неоплаченный счёт подписки
     payment = await db.scalar(
-        select(Payment).where(
+        select(Payment)
+        .where(
             Payment.subscription_id == subscription_id,
-            Payment.kaspi_invoice_id == sub.current_invoice_id,
+            Payment.status == PaymentStatus.pending,
         )
+        .order_by(Payment.created_at.desc())
     )
     if not payment:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment record not found")
-
-    from app.services.kaspi import kaspi_client
-
-    payment_url: str | None = None
-    try:
-        inv = await kaspi_client.get_invoice_status(sub.current_invoice_id)
-        payment_url = f"https://pay.kaspi.kz/pay/{sub.current_invoice_id}"  # адаптируйте
-    except Exception:
-        pass
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No pending invoice")
 
     return InvoiceOut(
         subscription_id=sub.id,
         payment_id=payment.id,
         kaspi_invoice_id=payment.kaspi_invoice_id,
-        payment_url=payment_url,
+        payment_url=payment.payment_url,
         amount_kzt=payment.amount_kzt,
         status=payment.status.value,
     )

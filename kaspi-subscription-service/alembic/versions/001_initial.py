@@ -94,23 +94,31 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("subscription_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("amount_kzt", sa.Integer(), nullable=False),
+        sa.Column("base_amount_kzt", sa.Integer(), nullable=True),
+        sa.Column("payment_url", sa.String(2048), nullable=True),
         sa.Column("kaspi_invoice_id", sa.String(255), nullable=True),
+        sa.Column("reference_code", sa.String(16), nullable=True),
         sa.Column("idempotency_key", sa.String(255), nullable=False),
         sa.Column(
             "status",
             postgresql.ENUM("pending", "paid", "expired", "failed", name="payment_status", create_type=False),
             nullable=False,
         ),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("confirmed_by", sa.String(255), nullable=True),
         sa.Column("paid_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.ForeignKeyConstraint(["subscription_id"], ["subscriptions.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("kaspi_invoice_id"),
+        sa.UniqueConstraint("reference_code"),
         sa.UniqueConstraint("idempotency_key"),
     )
     op.create_index("ix_payments_kaspi_invoice", "payments", ["kaspi_invoice_id"])
+    op.create_index("ix_payments_reference_code", "payments", ["reference_code"])
     op.create_index("ix_payments_status", "payments", ["status"])
+    op.create_index("ix_payments_amount", "payments", ["amount_kzt"])
 
 
 def downgrade() -> None:

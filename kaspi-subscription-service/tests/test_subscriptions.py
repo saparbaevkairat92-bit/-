@@ -4,7 +4,6 @@
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -12,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.customer import Customer
 from app.models.subscription import Subscription, SubscriptionStatus
-from app.services.kaspi import KaspiInvoice
 from app.services.subscription_manager import activate_subscription, suspend_subscription
 from tests.conftest import make_plan, make_project
 
@@ -32,30 +30,27 @@ async def setup(db: AsyncSession):
 async def test_create_subscription_via_api(db: AsyncSession, client: AsyncClient, setup):
     project, plan, customer, api_key = setup
 
-    mock_invoice = KaspiInvoice(invoice_id="INV-SUB-001", payment_url="https://kaspi.kz/INV-SUB-001")
-    with patch("app.services.billing.kaspi_client.create_invoice", new=AsyncMock(return_value=mock_invoice)):
-        resp = await client.post(
-            "/v1/subscriptions",
-            json={"customer_id": str(customer.id), "plan_id": str(plan.id)},
-            headers={"X-API-Key": api_key},
-        )
+    resp = await client.post(
+        "/v1/subscriptions",
+        json={"customer_id": str(customer.id), "plan_id": str(plan.id)},
+        headers={"X-API-Key": api_key},
+    )
 
     assert resp.status_code == 201
     data = resp.json()
     assert data["status"] == "past_due"
-    assert data["current_invoice_id"] == "INV-SUB-001"
+    # current_invoice_id хранит reference_code счёта
+    assert data["current_invoice_id"] is not None
 
 
 async def test_get_subscription_status(db: AsyncSession, client: AsyncClient, setup):
     project, plan, customer, api_key = setup
 
-    mock_invoice = KaspiInvoice(invoice_id="INV-STATUS", payment_url="")
-    with patch("app.services.billing.kaspi_client.create_invoice", new=AsyncMock(return_value=mock_invoice)):
-        create_resp = await client.post(
-            "/v1/subscriptions",
-            json={"customer_id": str(customer.id), "plan_id": str(plan.id)},
-            headers={"X-API-Key": api_key},
-        )
+    create_resp = await client.post(
+        "/v1/subscriptions",
+        json={"customer_id": str(customer.id), "plan_id": str(plan.id)},
+        headers={"X-API-Key": api_key},
+    )
     sub_id = create_resp.json()["id"]
 
     resp = await client.get(f"/v1/subscriptions/{sub_id}", headers={"X-API-Key": api_key})
@@ -111,13 +106,11 @@ async def test_activate_then_suspend(db: AsyncSession):
 async def test_cancel_subscription_via_api(db: AsyncSession, client: AsyncClient, setup):
     project, plan, customer, api_key = setup
 
-    mock_invoice = KaspiInvoice(invoice_id="INV-CANCEL", payment_url="")
-    with patch("app.services.billing.kaspi_client.create_invoice", new=AsyncMock(return_value=mock_invoice)):
-        create_resp = await client.post(
-            "/v1/subscriptions",
-            json={"customer_id": str(customer.id), "plan_id": str(plan.id)},
-            headers={"X-API-Key": api_key},
-        )
+    create_resp = await client.post(
+        "/v1/subscriptions",
+        json={"customer_id": str(customer.id), "plan_id": str(plan.id)},
+        headers={"X-API-Key": api_key},
+    )
     sub_id = create_resp.json()["id"]
 
     resp = await client.delete(f"/v1/subscriptions/{sub_id}", headers={"X-API-Key": api_key})

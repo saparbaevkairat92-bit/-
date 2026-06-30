@@ -71,43 +71,22 @@ async def grace_job() -> None:
                 logger.exception("grace_job: error sub=%s", sub.id)
 
 
-async def poll_job() -> None:
+async def expire_job() -> None:
     """
-    Поллинг статуса pending-счетов у Kaspi (fallback если webhook не пришёл).
+    Помечает неоплаченные счета как expired по истечении срока действия.
     """
-    from app.services.billing import poll_invoice_status
-    from app.services.subscription_manager import activate_subscription, suspend_subscription
+    from app.services.billing import expire_stale_payments
 
     async with AsyncSessionLocal() as db:
-        payments = (
-            await db.execute(
-                select(Payment).where(Payment.status == PaymentStatus.pending)
-            )
-        ).scalars().all()
-
-        for payment in payments:
-            try:
-                kaspi_status = await poll_invoice_status(db, payment)
-                if kaspi_status is None:
-                    continue
-
-                if kaspi_status.status.upper() == "PAID":
-                    sub = await db.get(Subscription, payment.subscription_id)
-                    if sub:
-                        await activate_subscription(db, sub, payment)
-                elif kaspi_status.status.upper() in ("EXPIRED", "FAILED"):
-                    payment.status = PaymentStatus.expired
-                    await db.commit()
-                    sub = await db.get(Subscription, payment.subscription_id)
-                    if sub and sub.grace_ends_at and datetime.now(UTC) > sub.grace_ends_at:
-                        await suspend_subscription(db, sub)
-            except Exception:
-                logger.exception("poll_job: error payment=%s", payment.id)
+        try:
+            await expire_stale_payments(db)
+        except Exception:
+            logger.exception("expire_job: error")
 
 
 def create_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(billing_job, "interval", hours=1, id="billing_job")
     scheduler.add_job(grace_job, "interval", hours=1, id="grace_job")
-    scheduler.add_job(poll_job, "interval", seconds=settings.poll_interval_seconds, id="poll_job")
+    scheduler.add_job(expire_job, "interval", seconds=settings.poll_interval_seconds, id="expire_job")
     return scheduler

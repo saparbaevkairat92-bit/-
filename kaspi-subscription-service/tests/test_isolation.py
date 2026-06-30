@@ -3,7 +3,6 @@
 """
 
 import uuid
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -11,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.customer import Customer
 from app.models.subscription import Subscription, SubscriptionStatus
-from app.services.kaspi import KaspiInvoice
 from tests.conftest import make_plan, make_project
 
 
@@ -44,13 +42,11 @@ async def test_project_cannot_read_other_projects_subscription(
     (_, key_a, _, _), (_, key_b, plan_b, cust_b) = two_projects
 
     # Создаём подписку в проекте B
-    mock_invoice = KaspiInvoice(invoice_id="INV-ISO-B", payment_url="")
-    with patch("app.services.billing.kaspi_client.create_invoice", new=AsyncMock(return_value=mock_invoice)):
-        create_resp = await client.post(
-            "/v1/subscriptions",
-            json={"customer_id": str(cust_b.id), "plan_id": str(plan_b.id)},
-            headers={"X-API-Key": key_b},
-        )
+    create_resp = await client.post(
+        "/v1/subscriptions",
+        json={"customer_id": str(cust_b.id), "plan_id": str(plan_b.id)},
+        headers={"X-API-Key": key_b},
+    )
     assert create_resp.status_code == 201
     sub_b_id = create_resp.json()["id"]
 
@@ -64,13 +60,11 @@ async def test_project_cannot_create_subscription_with_other_projects_plan(
 ):
     (_, key_a, _, cust_a), (_, _, plan_b, _) = two_projects
 
-    mock_invoice = KaspiInvoice(invoice_id="INV-ISO-X", payment_url="")
-    with patch("app.services.billing.kaspi_client.create_invoice", new=AsyncMock(return_value=mock_invoice)):
-        resp = await client.post(
-            "/v1/subscriptions",
-            json={"customer_id": str(cust_a.id), "plan_id": str(plan_b.id)},
-            headers={"X-API-Key": key_a},
-        )
+    resp = await client.post(
+        "/v1/subscriptions",
+        json={"customer_id": str(cust_a.id), "plan_id": str(plan_b.id)},
+        headers={"X-API-Key": key_a},
+    )
 
     assert resp.status_code == 404
 
