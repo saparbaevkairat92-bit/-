@@ -863,20 +863,24 @@ function normDate(s){const m=s.match(/(\d{2})\.(\d{2})\.(\d{2,4})/);if(!m)return
 function parseStatement(text){
   if(!text)return[];
   let t=text.replace(/[    ]/g," ").replace(/[–—−]/g,"-").replace(/\s+/g," ");
-  const rows=[];const seen=new Set();
+  let opening=null,openDate=null;
+  const per=t.match(/за период с (\d{2}\.\d{2}\.\d{2,4})/);
+  if(per){openDate=per[1];const ob=t.match(new RegExp("Доступно на "+per[1].replace(/\./g,"\\.")+"\\s*\\+?\\s*([\\d ]+[.,]\\d{2})"));if(ob)opening=Math.round(parseFloat(ob[1].replace(/ /g,"").replace(",",".")));}
+  let body=t;const hi=t.indexOf("Детали");if(hi>=0)body=t.slice(hi+6);
+  const rows=[];
   const re=/(\d{2}\.\d{2}\.\d{2,4}) ?(\+|-) ?([\d ]{1,15}[.,]\d{2})(?!\.?\d)[^\d]{0,3}?₸?(.*?)(?= \d{2}\.\d{2}\.\d{2,4} ?[+-] ?[\d ]{1,15}[.,]\d{2}(?!\.?\d)|$)/g;
   let m;
-  while(m=re.exec(t)){
+  while(m=re.exec(body)){
     const date=normDate(m[1]); if(!date)continue;
     const type=m[2]==="+"?"income":"expense";
     const amount=Math.round(parseFloat(m[3].replace(/ /g,"").replace(",",".")));
     if(!amount||amount>50000000)continue;
-    let desc=(m[4]||"").replace(/[\d ]{2,}[.,]\d{2}\s*₸?/g," ").replace(/₸/g," ").replace(/\s+/g," ").trim().slice(0,90);
-    const key=date+type+amount+desc;
-    if(seen.has(key))continue; seen.add(key);
+    let desc=(m[4]||"").replace(/[\d ]{2,}[.,]\d{2}\s*₸?/g," ").replace(/₸/g," ").replace(/\s+/g," ").trim();
+    desc=desc.replace(/\s*АО «?Kaspi Bank».*$/i,"").trim().slice(0,90);
     rows.push({date,type,amount,desc,cat:guessCat(desc,type),on:true});
   }
   rows.sort((a,b)=>a.date<b.date?1:-1);
+  if(opening!=null&&opening>0)rows.unshift({date:normDate(openDate),type:"income",amount:opening,desc:"Начальный остаток по выписке (Kaspi)",cat:"Прочее",on:true});
   return rows;
 }
 function guessCat(desc,type){
@@ -1226,12 +1230,48 @@ function padError(el){const d=el.querySelector(".dots");if(d){d.classList.remove
 function bootLock(){
   if(!S.settings.pin)return false;
   const el=$("#lock");el.classList.add("on");
-  mountPad($("#lockbox"),{title:"Введите пин-код",sub:"Копилка защищена",onDone:(pin)=>{
+  const box=$("#lockbox");
+  mountPad(box,{title:"Введите пин-код",sub:"Копилка защищена",onDone:(pin)=>{
     if(pinHash(pin)===S.settings.pin)el.classList.remove("on");
-    else padError($("#lockbox"));
+    else padError(box);
   }});
+  if(S.settings.bioId && window.PublicKeyCredential){
+    const b=document.createElement("button");
+    b.className="btn ghost";b.style.marginTop="18px";
+    b.innerHTML='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" style="margin-right:6px;vertical-align:-3px"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M9 10a3 3 0 0 1 6 0M8.5 13.5c.5 1.5 1.7 2.5 3.5 2.5M15.5 11v1.5"/></svg>Войти по Face ID';
+    b.onclick=()=>tryBio(el,box);
+    const w=box.querySelector(".padwrap");if(w)w.appendChild(b);
+    setTimeout(()=>tryBio(el,box),350);
+  }
   return true;
 }
+async function tryBio(el,box){const ok=await bioUnlock();if(ok)el.classList.remove("on");}
+async function bioUnlock(){
+  if(!S.settings.bioId||!window.PublicKeyCredential)return false;
+  try{
+    const challenge=crypto.getRandomValues(new Uint8Array(32));
+    const rawId=Uint8Array.from(atob(S.settings.bioId),c=>c.charCodeAt(0));
+    const a=await navigator.credentials.get({publicKey:{challenge,allowCredentials:[{type:"public-key",id:rawId}],userVerification:"required",timeout:60000}});
+    return !!a;
+  }catch(e){return false;}
+}
+async function enableBio(){
+  try{
+    if(!window.PublicKeyCredential){toast("Устройство не поддерживает");return;}
+    const challenge=crypto.getRandomValues(new Uint8Array(32));
+    const uid16=crypto.getRandomValues(new Uint8Array(16));
+    const cred=await navigator.credentials.create({publicKey:{
+      challenge,rp:{name:"Копилка"},user:{id:uid16,name:"kopilka",displayName:"Копилка"},
+      pubKeyCredParams:[{type:"public-key",alg:-7},{type:"public-key",alg:-257}],
+      authenticatorSelection:{authenticatorAttachment:"platform",userVerification:"required"},
+      timeout:60000,attestation:"none"
+    }});
+    if(!cred){toast("Отменено");return;}
+    S.settings.bioId=btoa(String.fromCharCode.apply(null,new Uint8Array(cred.rawId)));
+    save();toast("Face ID включён 🙂");openSettings();
+  }catch(e){toast("Не удалось включить Face ID");}
+}
+function disableBio(){delete S.settings.bioId;save();toast("Face ID отключён");openSettings();}
 
 function themeLabel(){const t=S.settings.theme;return t==="dark"?"Тёмная":t==="light"?"Светлая":"Как в системе";}
 function cycleTheme(){const c=S.settings.theme;S.settings.theme=c==="dark"?"light":c==="light"?null:"dark";save();applyTheme();}
@@ -1243,7 +1283,7 @@ function openSettings(){
     <div class="stat"><span class="k">Тема оформления</span><button class="btn ghost sm" id="stTheme">${themeLabel()}</button></div>
     <div class="stat"><span class="k">Пин-код при входе</span><span class="tag ${hasPin?"g":"r"}">${hasPin?"включён":"выключен"}</span></div>
     <div style="display:flex;flex-direction:column;gap:10px;margin-top:16px">
-      ${hasPin?`<button class="btn ghost" id="stChange">Изменить пин-код</button><button class="btn ghost" id="stOff" style="color:var(--exp)">Отключить пин-код</button>`:`<button class="btn" id="stSet">🔒 Установить пин-код</button>`}
+      ${hasPin?`<button class="btn ghost" id="stChange">Изменить пин-код</button>${window.PublicKeyCredential?`<button class="btn ghost" id="stBio">${S.settings.bioId?"🙂 Отключить Face ID / Touch ID":"🙂 Включить Face ID / Touch ID"}</button>`:""}<button class="btn ghost" id="stOff" style="color:var(--exp)">Отключить пин-код</button>`:`<button class="btn" id="stSet">🔒 Установить пин-код</button>`}
     </div>
     <div class="help" style="margin-top:12px">Пин защищает вход и хранится на телефоне в зашифрованном виде. Если забудешь пин — вход можно вернуть только сбросом данных.</div>
     <div style="border-top:1px solid var(--line);margin-top:20px;padding-top:16px">
@@ -1252,7 +1292,7 @@ function openSettings(){
     </div>
   `);
   $("#stTheme").onclick=()=>{cycleTheme();openSettings();};
-  if(hasPin){$("#stChange").onclick=pinChangeFlow;$("#stOff").onclick=pinOffFlow;}
+  if(hasPin){$("#stChange").onclick=pinChangeFlow;$("#stOff").onclick=pinOffFlow;if($("#stBio"))$("#stBio").onclick=S.settings.bioId?disableBio:enableBio;}
   else $("#stSet").onclick=pinSetFlow;
   $("#stReset").onclick=resetData;
 }
@@ -1280,7 +1320,7 @@ function pinOffFlow(){
   openSheet(`<div id="padHost"></div>`);const host=$("#padHost");
   mountPad(host,{title:"Введите пин-код",sub:"чтобы отключить",leftLabel:"Отмена",onLeft:closeSheet,onDone:(pin)=>{
     if(pinHash(pin)!==S.settings.pin){padError(host);return;}
-    delete S.settings.pin;delete S.settings.pinSalt;save();closeSheet();toast("Пин-код отключён");
+    delete S.settings.pin;delete S.settings.pinSalt;delete S.settings.bioId;save();closeSheet();toast("Пин-код отключён");
   }});
 }
 function resetData(){
