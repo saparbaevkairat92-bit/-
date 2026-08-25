@@ -265,6 +265,7 @@ body{padding-bottom:calc(112px + env(safe-area-inset-bottom))}
 .wallet-split{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
 .wallet-split span{font-size:12px;color:var(--muted);background:var(--surface2);border:1px solid var(--line);
   padding:5px 10px;border-radius:999px;white-space:nowrap}
+.wallet-split span.unset{border-style:dashed;color:var(--faint);cursor:pointer}
 .safe-card{background:linear-gradient(135deg,var(--acc-soft),transparent 70%),var(--surface)}
 .qrow{flex-wrap:wrap}
 .qrow .chip{font-variant-numeric:tabular-nums}
@@ -676,14 +677,22 @@ function moneyState(){
   const r=aggregate(S.transactions);
   const st=S.settings||{};
   const account=r.account;
-  const cash=(st.openingCash||0)+r.cash;
-  const other=(st.openingOther||0)+r.other;
+  /* Выписка показывает только карту. Наличные и другие свои счета
+     считаются от начального остатка, который знает только пользователь.
+     Если он не указан, корзина уходит в минус — это не долг, а НЕИЗВЕСТНАЯ
+     величина. Такие корзины не показываем и в общий итог не берём:
+     выдуманный минус хуже, чем честное «не указано». */
+  const cashRaw=(st.openingCash||0)+r.cash;
+  const otherRaw=(st.openingOther||0)+r.other;
+  const cashUnknown=cashRaw<0, otherUnknown=otherRaw<0;
+  const cash=cashUnknown?0:cashRaw;
+  const other=otherUnknown?0:otherRaw;
   const deposits=depositsTotal();
   const total=account+cash+other+deposits;
   const saved=savedTotal();
   return{account,cash,other,deposits,total,saved,available:total-saved,
-    /* корзина ушла в минус => есть неучтённые поступления вне выписки */
-    cashUnknown:cash<0, otherUnknown:other<0};
+    cashRaw,otherRaw,cashUnknown,otherUnknown,
+    incomplete:cashUnknown||otherUnknown};
 }
 function balance(){return moneyState().account;}          /* баланс карты — сходится с выпиской */
 function totalMoney(){return moneyState().total;}
@@ -771,7 +780,7 @@ function viewHome(){
   /* корзина ушла в минус — честно предлагаем уточнить остатки */
   const unknownBanner=(ms.cashUnknown||ms.otherUnknown)?`
     <div class="banner" style="margin-top:12px"><span style="font-size:22px">🧮</span>
-      <div class="bt"><b>Уточни остатки</b>Часть денег приходила из источников вне выписки — укажи наличные и другие счета, чтобы «Всего денег» было верным.</div>
+      <div class="bt"><b>Итог неполный</b>Выписка показывает только карту. Наличные и деньги на других своих счетах приложение не знает — укажи их, чтобы «Всего денег» стало верным.</div>
       <button class="btn gold sm" data-act="opening">Уточнить</button></div>`:"";
   const ts=fmt(ms.total);
   const balFs=ts.length>9?"30px":ts.length>7?"36px":"42px";
@@ -794,10 +803,11 @@ function viewHome(){
     </div>
     <div class="wallet-split">
       <span data-act="drill" data-kind="expense">💳 Счёт ${fmt(ms.account)}</span>
-      <span data-act="drill" data-kind="cash">💵 Наличные ${fmt(ms.cash)}</span>
-      ${ms.other?`<span>🏛 Другие ${fmt(ms.other)}</span>`:""}
+      <span data-act="${ms.cashUnknown?"opening":"drill"}" data-kind="cash" ${ms.cashUnknown?'class="unset"':""}>💵 Наличные ${ms.cashUnknown?"не указаны":fmt(ms.cash)}</span>
+      ${ms.otherUnknown?`<span data-act="opening" class="unset">🏛 Другие счета не указаны</span>`:(ms.other?`<span>🏛 Другие ${fmt(ms.other)}</span>`:"")}
       ${ms.deposits?`<span>🏦 Депозиты ${fmt(ms.deposits)}</span>`:""}
     </div>
+    ${ms.incomplete?`<div class="help" style="margin-top:10px">Считаем только то, что известно${ms.deposits?" (карта и депозиты)":" — по карте"}. Укажи наличные и другие счета, чтобы итог стал полным.</div>`:""}
   </div>
 
   ${sts.perDay>0?`<div class="card safe-card" style="margin-top:12px">
@@ -1365,10 +1375,11 @@ function statCash(list){
   const avg=out.length?Math.round(cf.out/out.length):0;
   return `
   <div class="hero" style="margin-top:8px">
-    <div class="lbl">💵 Расчётный остаток наличных</div>
-    <div class="bal ${ms.cash<0?'r':'y'}" style="font-size:clamp(26px,8vw,38px)">${fmt(ms.cash)} <span class="cur">₸</span></div>
+    <div class="lbl">💵 Наличные на руках</div>
+    <div class="bal ${ms.cashUnknown?'':'y'}" style="font-size:clamp(22px,7vw,34px)">${ms.cashUnknown?"не указано":fmt(ms.cash)+" ₸"}</div>
     <div class="sub">Снятие наличных — перемещение денег, а не расход.</div>
-    ${ms.cashUnknown?`<button class="btn gold sm" data-act="opening" style="margin-top:12px">Уточнить остаток наличных</button>`:""}
+    ${ms.cashUnknown?`<div class="help" style="margin-top:10px">Ты внёс наличными на ${money(-ms.cashRaw)} больше, чем снял — значит часть наличных пришла не с карты. Укажи, сколько было на руках в начале.</div>
+      <button class="btn gold sm" data-act="opening" style="margin-top:12px">Указать остаток наличных</button>`:""}
   </div>
   <div class="split2" style="margin-top:12px">
     <div class="mini"><div class="k">Снято за период</div><div class="v">${fmt(cf.out)}</div></div>
@@ -4304,12 +4315,12 @@ function openOpening(){
     <div class="field"><label>На других своих счетах, ₸</label>
       <input class="inp num" id="opOther" type="text" inputmode="numeric" autocomplete="off" value="${fmtInput(String(st.openingOther||0))}"></div>
     <div class="card" style="padding:14px;margin-bottom:14px">
-      <div class="stat"><span class="k">Сейчас по расчёту: наличные</span><span class="v ${ms.cash<0?'r':''}">${money(ms.cash)}</span></div>
-      <div class="stat"><span class="k">Сейчас по расчёту: другие счета</span><span class="v ${ms.other<0?'r':''}">${money(ms.other)}</span></div>
-      <div class="help" style="margin-top:8px">Отрицательное значение значит, что деньги приходили из источников вне выписки. Прибавь их здесь.</div>
+      <div class="stat"><span class="k">Наличные: не хватает минимум</span><span class="v ${ms.cashUnknown?'y':'g'}">${ms.cashUnknown?money(-ms.cashRaw):"всё сходится"}</span></div>
+      <div class="stat"><span class="k">Другие счета: не хватает минимум</span><span class="v ${ms.otherUnknown?'y':'g'}">${ms.otherUnknown?money(-ms.otherRaw):"всё сходится"}</span></div>
+      <div class="help" style="margin-top:8px">Это минимум, который должен был быть у тебя в начале периода. Кнопка ниже подставит именно эти суммы.</div>
     </div>
     <button class="btn" id="opSave">Сохранить</button>
-    <button class="btn ghost" id="opFix" style="margin-top:10px">Обнулить минусы автоматически</button>
+    <button class="btn ghost" id="opFix" style="margin-top:10px">Подставить минимально необходимые</button>
     <button class="btn ghost" id="opClose" style="margin-top:10px">Закрыть</button>
   `);
   ["opCash","opOther"].forEach(i=>{const el=$("#"+i);el.oninput=()=>el.value=fmtInput(el.value);});
@@ -4320,8 +4331,8 @@ function openOpening(){
   };
   $("#opFix").onclick=()=>{
     const m=moneyState();
-    if(m.cash<0)S.settings.openingCash=(S.settings.openingCash||0)-m.cash;
-    if(m.other<0)S.settings.openingOther=(S.settings.openingOther||0)-m.other;
+    if(m.cashUnknown)S.settings.openingCash=(S.settings.openingCash||0)-m.cashRaw;
+    if(m.otherUnknown)S.settings.openingOther=(S.settings.openingOther||0)-m.otherRaw;
     save();closeSheet();render();toast("Минусы обнулены");
   };
   $("#opClose").onclick=closeSheet;
