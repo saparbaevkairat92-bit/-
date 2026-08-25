@@ -246,6 +246,16 @@ body{padding-bottom:calc(112px + env(safe-area-inset-bottom))}
 #view>*{animation:fadeUp .26s ease both}
 @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 
+/* Экран входа по логину и паролю */
+#gate{position:fixed;inset:0;z-index:210;background:var(--bg);display:none;
+  align-items:center;justify-content:center;overflow-y:auto;
+  padding:24px calc(20px + env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left))}
+#gate.on{display:flex}
+.gatewrap{width:100%;max-width:min(360px,92vw);margin:auto}
+.gatelogo{display:flex;justify-content:center;margin-bottom:16px}
+.gatetitle{font-family:"Bricolage Grotesque";font-weight:800;font-size:24px;text-align:center;letter-spacing:-.02em}
+.gatesub{color:var(--muted);font-size:13.5px;text-align:center;margin:6px 0 22px;line-height:1.5}
+
 /* PIN: адаптивная вертикаль, заметный backspace */
 #lock{align-items:center}
 .padwrap{max-width:min(320px,86vw);margin:0 auto}
@@ -356,6 +366,7 @@ label.btn{cursor:pointer}
 <div class="sheet" id="sheet"></div>
 <div class="toast" id="toast"></div>
 <div id="lock"><div id="lockbox" class="lockbox"></div></div>
+<div id="gate"><div id="gatebox"></div></div>
 
 <script>
 "use strict";
@@ -412,13 +423,19 @@ function fresh(){return{
   seen:false
 };}
 function save(){
-  try{S.updatedAt=Date.now();localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}
+  try{
+    S.updatedAt=Date.now();
+    /* при включённом входе по паролю данные пишутся зашифрованными */
+    if(typeof LOCKKEY!=="undefined"&&LOCKKEY&&typeof localOn==="function"&&localOn())scheduleEncSave();
+    else localStorage.setItem(KEY,JSON.stringify(S));
+  }catch(e){}
   try{if(typeof autoSync==="function")autoSync();}catch(e){}
 }
 function load(){
   let d=null;
   try{d=JSON.parse(localStorage.getItem(KEY));}catch(e){d=null;}
   if(!d)return fresh();
+  if(d.enc)return fresh();      /* зашифровано — расшифруется после входа */
   return migrate(Object.assign(fresh(),d));
 }
 
@@ -3064,7 +3081,8 @@ function openSettings(){
     </div>
     <div class="help" style="margin-top:12px">Пин защищает вход и хранится на телефоне в зашифрованном виде. Если забудешь пин — вход можно вернуть только сбросом данных.</div>
     <div style="border-top:1px solid var(--line);margin-top:20px;padding-top:16px;display:flex;flex-direction:column;gap:10px">
-      <button class="btn" id="stAcct">☁️ Аккаунт и копия в облаке</button>
+      <button class="btn" id="stLocal">👤 Вход по логину и паролю</button>
+      <button class="btn ghost" id="stAcct">☁️ Копия в облаке (нужен сервер)</button>
       <button class="btn ghost" id="stQuick">⚡ Быстрые действия</button>
       <button class="btn ghost" id="stAch">🏆 Достижения</button>
       <button class="btn ghost" id="stPlan">📋 Финансовый план</button>
@@ -3082,6 +3100,7 @@ function openSettings(){
   $("#stTheme").onclick=()=>{cycleTheme();openSettings();};
   if(hasPin){$("#stChange").onclick=pinChangeFlow;$("#stOff").onclick=pinOffFlow;if($("#stBio"))$("#stBio").onclick=S.settings.bioId?disableBio:enableBio;}
   else $("#stSet").onclick=pinSetFlow;
+  $("#stLocal").onclick=openLocalAccount;
   $("#stAcct").onclick=openAccount;
   $("#stQuick").onclick=openQuickActions;
   $("#stAch").onclick=openAchievements;
@@ -4165,6 +4184,221 @@ function openAccount(){
 <script>
 "use strict";
 /* =====================================================================
+   ЛОКАЛЬНЫЙ АККАУНТ (логин и пароль без сервера)
+   Данные остаются в памяти телефона, но хранятся ЗАШИФРОВАННЫМИ.
+   Ключ выводится из пароля и никуда не отправляется.
+   ===================================================================== */
+const LKEY="kopilka_local";
+let LOCAL=null;        /* {on, login, salt, verifier, remember, key} */
+let LOCKKEY=null;      /* CryptoKey для шифрования локальных данных */
+
+function localLoad(){
+  try{LOCAL=JSON.parse(localStorage.getItem(LKEY)||"null");}catch(e){LOCAL=null;}
+  return LOCAL;
+}
+function localSave(){try{localStorage.setItem(LKEY,JSON.stringify(LOCAL));}catch(e){}}
+function localOn(){return !!(LOCAL&&LOCAL.on);}
+/* данные в хранилище лежат зашифрованными? */
+function storeEncrypted(){
+  try{const raw=localStorage.getItem(KEY);return !!raw&&raw.slice(0,10).indexOf('"enc"')>=0;}catch(e){return false;}
+}
+async function deriveLocalKey(login,password,saltB64){
+  const enc=new TextEncoder();
+  const salt=saltB64?unb64(saltB64):new Uint8Array(await crypto.subtle.digest("SHA-256",
+    enc.encode("kopilka-local:"+String(login).trim().toLowerCase())));
+  const base=await crypto.subtle.importKey("raw",enc.encode(password),{name:"PBKDF2"},false,["deriveBits"]);
+  const bits=await crypto.subtle.deriveBits({name:"PBKDF2",salt,iterations:200000,hash:"SHA-256"},base,256);
+  return new Uint8Array(bits);
+}
+async function keyVerifier(raw){
+  return hex(await crypto.subtle.digest("SHA-256",raw));   /* для проверки пароля */
+}
+async function encLocal(obj){
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  const ct=await crypto.subtle.encrypt({name:"AES-GCM",iv},LOCKKEY,
+    new TextEncoder().encode(JSON.stringify(obj)));
+  const out=new Uint8Array(iv.length+ct.byteLength); out.set(iv,0); out.set(new Uint8Array(ct),iv.length);
+  return JSON.stringify({enc:1,v:1,d:b64(out)});
+}
+async function decLocal(raw){
+  const o=JSON.parse(raw);
+  const all=unb64(o.d);
+  const pt=await crypto.subtle.decrypt({name:"AES-GCM",iv:all.slice(0,12)},LOCKKEY,all.slice(12));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+
+/* ---------- сохранение в зашифрованном виде ---------- */
+let _encT=null, _encPending=false;
+function scheduleEncSave(){
+  _encPending=true;
+  clearTimeout(_encT);
+  _encT=setTimeout(flushEncSave,150);
+}
+async function flushEncSave(){
+  if(!_encPending||!LOCKKEY)return;
+  _encPending=false;
+  try{localStorage.setItem(KEY,await encLocal(S));}catch(e){}
+}
+/* при сворачивании и закрытии дописываем немедленно, чтобы ничего не потерять */
+document.addEventListener("visibilitychange",()=>{if(document.hidden)flushEncSave();});
+window.addEventListener("pagehide",()=>{flushEncSave();});
+
+/* ---------- экран входа ---------- */
+function gateShow(html){
+  const g=$("#gate"); g.classList.add("on");
+  $("#gatebox").innerHTML=`<div class="gatewrap">
+    <div class="gatelogo"><span class="logo" style="width:52px;height:52px;border-radius:16px">
+      <svg viewBox="0 0 24 24" fill="none" width="27" height="27"><path d="M7 10V8a5 5 0 0 1 10 0v2" stroke="#04120c" stroke-width="2" stroke-linecap="round"/><rect x="5" y="10" width="14" height="10" rx="3" stroke="#04120c" stroke-width="2"/><circle cx="12" cy="15" r="1.3" fill="#04120c"/></svg></span></div>
+    ${html}</div>`;
+}
+function gateHide(){$("#gate").classList.remove("on");}
+
+function openGateLogin(){
+  gateShow(`
+    <div class="gatetitle">Копилка</div>
+    <div class="gatesub">Вход в личный кабинет</div>
+    <div class="field"><label>Логин</label>
+      <input class="inp" id="gLogin" autocapitalize="none" autocorrect="off" spellcheck="false"
+        autocomplete="username" value="${esc((LOCAL&&LOCAL.login)||"")}"></div>
+    <div class="field"><label>Пароль</label>
+      <input class="inp" id="gPass" type="password" autocomplete="current-password" enterkeyhint="go"></div>
+    <button class="btn" id="gEnter">Войти</button>
+    <div id="gErr" class="help" style="margin-top:12px;min-height:18px;text-align:center"></div>
+  `);
+  const err=$("#gErr");
+  const go=async()=>{
+    const login=$("#gLogin").value.trim(), pass=$("#gPass").value;
+    if(!login||!pass){err.innerHTML='<span class="r">Введи логин и пароль</span>';return;}
+    err.textContent="Проверяю…";
+    try{
+      const raw=await deriveLocalKey(login,pass,LOCAL.salt);
+      if(await keyVerifier(raw)!==LOCAL.verifier){
+        err.innerHTML='<span class="r">Неверный логин или пароль</span>';
+        try{if(navigator.vibrate)navigator.vibrate(60);}catch(e){}
+        return;
+      }
+      LOCKKEY=await crypto.subtle.importKey("raw",raw,{name:"AES-GCM"},false,["encrypt","decrypt"]);
+      if(LOCAL.remember!==false){LOCAL.key=b64(raw);localSave();}
+      await afterUnlock();
+    }catch(e){err.innerHTML='<span class="r">'+esc(e.message||String(e))+'</span>';}
+  };
+  $("#gEnter").onclick=go;
+  $("#gPass").onkeydown=(e)=>{if(e.key==="Enter")go();};
+  setTimeout(()=>{try{($("#gLogin").value?$("#gPass"):$("#gLogin")).focus();}catch(e){}},80);
+}
+/* после успешного входа — расшифровать и запустить приложение */
+async function afterUnlock(){
+  try{
+    const raw=localStorage.getItem(KEY);
+    if(raw&&storeEncrypted())S=migrate(Object.assign(fresh(),await decLocal(raw)));
+    else S=load();
+  }catch(e){
+    gateShow(`<div class="gatetitle">Не удалось открыть данные</div>
+      <div class="gatesub">Данные зашифрованы другим паролем.</div>
+      <button class="btn ghost" id="gBack">Попробовать снова</button>`);
+    $("#gBack").onclick=openGateLogin; return;
+  }
+  gateHide();
+  applyTheme(); render(); updateSyncBadge();
+  bootLock();                       /* пин-код поверх, если включён */
+  checkAchievements(true); checkReminders();
+  if(typeof isLoggedIn==="function"&&isLoggedIn())syncNow(true);
+  if(typeof bootRest==="function")bootRest();
+}
+
+/* ---------- создание / отключение аккаунта ---------- */
+function openLocalAccount(){
+  const on=localOn();
+  openSheet(`
+    <h2>👤 Вход по логину и паролю</h2>
+    <div class="help" style="margin-bottom:14px">Данные остаются <b style="color:var(--txt)">в памяти телефона</b> и никуда не отправляются. Пароль шифрует их: без него открыть не получится даже с этого же телефона.</div>
+    ${on?`
+      <div class="card" style="padding:14px;margin-bottom:14px">
+        <div class="stat"><span class="k">Логин</span><span class="v">${esc(LOCAL.login)}</span></div>
+        <div class="stat"><span class="k">Данные зашифрованы</span><span class="tag g">да</span></div>
+        <div class="stat"><span class="k">Не спрашивать пароль каждый раз</span>
+          <input type="checkbox" id="laRemember" ${LOCAL.remember!==false?"checked":""} style="width:22px;height:22px;accent-color:var(--acc)"></div>
+      </div>
+      <div class="help" style="margin-bottom:14px">Если галочка снята — пароль спрашивается при каждом запуске, и данные защищены по-настоящему. Если стоит — вход защищает от постороннего, но ключ лежит на телефоне рядом с данными.</div>
+      <button class="btn ghost" id="laPass" style="margin-bottom:10px">Сменить пароль</button>
+      <button class="btn ghost" id="laOff" style="color:var(--exp)">Отключить вход и снять шифрование</button>
+    `:`
+      <div class="banner red" style="margin-bottom:14px"><span style="font-size:20px">⚠️</span>
+        <div class="bt"><b>Пароль восстановить нельзя</b>Он и есть ключ шифрования. Забудешь — данные не откроются. Сначала сделай резервную копию.</div></div>
+      <button class="btn ghost" id="laBackup" style="margin-bottom:14px">💾 Сделать резервную копию</button>
+      <div class="field"><label>Логин</label>
+        <input class="inp" id="laLogin" placeholder="например kairat" autocapitalize="none" autocorrect="off" spellcheck="false"></div>
+      <div class="field"><label>Пароль</label>
+        <input class="inp" id="laPass1" type="password" placeholder="минимум 6 символов"></div>
+      <div class="field"><label>Повтори пароль</label>
+        <input class="inp" id="laPass2" type="password"></div>
+      <label style="display:flex;align-items:center;gap:10px;margin-bottom:16px;font-size:13.5px">
+        <input type="checkbox" id="laAck" style="width:22px;height:22px;accent-color:var(--acc)">
+        <span>Я записал пароль и сделал копию</span></label>
+      <button class="btn" id="laCreate">Включить вход по паролю</button>
+    `}
+    <div id="laStatus" class="help" style="margin-top:12px;min-height:18px"></div>
+    <button class="btn ghost" id="laClose" style="margin-top:12px">Закрыть</button>
+  `);
+  const st=$("#laStatus");
+  if($("#laBackup"))$("#laBackup").onclick=openBackup;
+  if($("#laRemember"))$("#laRemember").onchange=(e)=>{
+    LOCAL.remember=e.target.checked;
+    if(!e.target.checked)delete LOCAL.key;
+    else if(LOCKKEY)st.innerHTML='<span class="y">Ключ сохранится при следующем входе</span>';
+    localSave(); toast("Сохранено");
+  };
+  if($("#laCreate"))$("#laCreate").onclick=async()=>{
+    const login=$("#laLogin").value.trim(), p1=$("#laPass1").value, p2=$("#laPass2").value;
+    if(!/^[A-Za-z0-9._-]{3,32}$/.test(login)){st.innerHTML='<span class="r">Логин: 3–32 символа, латиница и цифры</span>';return;}
+    if(p1.length<6){st.innerHTML='<span class="r">Пароль минимум 6 символов</span>';return;}
+    if(p1!==p2){st.innerHTML='<span class="r">Пароли не совпадают</span>';return;}
+    if(!$("#laAck").checked){st.innerHTML='<span class="r">Подтверди, что записал пароль</span>';return;}
+    st.textContent="Шифрую данные…";
+    try{
+      const salt=b64(crypto.getRandomValues(new Uint8Array(16)));
+      const raw=await deriveLocalKey(login,p1,salt);
+      LOCKKEY=await crypto.subtle.importKey("raw",raw,{name:"AES-GCM"},false,["encrypt","decrypt"]);
+      LOCAL={on:true,login:login.toLowerCase(),salt,verifier:await keyVerifier(raw),remember:true,key:b64(raw)};
+      localSave();
+      localStorage.setItem(KEY,await encLocal(S));    /* перезаписываем данные шифром */
+      closeSheet(); render(); celebrate("🔐"); toast("Вход включён, данные зашифрованы");
+    }catch(e){st.innerHTML='<span class="r">'+esc(e.message||String(e))+'</span>';}
+  };
+  if($("#laPass"))$("#laPass").onclick=async()=>{
+    const cur=prompt("Текущий пароль"); if(!cur)return;
+    const nw=prompt("Новый пароль (минимум 6 символов)"); if(!nw)return;
+    if(nw.length<6){toast("Слишком короткий пароль");return;}
+    try{
+      const oldRaw=await deriveLocalKey(LOCAL.login,cur,LOCAL.salt);
+      if(await keyVerifier(oldRaw)!==LOCAL.verifier){toast("Текущий пароль неверный");return;}
+      const salt=b64(crypto.getRandomValues(new Uint8Array(16)));
+      const raw=await deriveLocalKey(LOCAL.login,nw,salt);
+      LOCKKEY=await crypto.subtle.importKey("raw",raw,{name:"AES-GCM"},false,["encrypt","decrypt"]);
+      LOCAL.salt=salt; LOCAL.verifier=await keyVerifier(raw);
+      if(LOCAL.remember!==false)LOCAL.key=b64(raw);
+      localSave(); localStorage.setItem(KEY,await encLocal(S));
+      toast("Пароль изменён");
+    }catch(e){toast("Не удалось сменить пароль");}
+  };
+  if($("#laOff"))$("#laOff").onclick=async()=>{
+    const cur=prompt("Введи пароль, чтобы отключить вход"); if(!cur)return;
+    try{
+      const raw=await deriveLocalKey(LOCAL.login,cur,LOCAL.salt);
+      if(await keyVerifier(raw)!==LOCAL.verifier){toast("Пароль неверный");return;}
+      LOCAL=null; LOCKKEY=null;
+      try{localStorage.removeItem(LKEY);}catch(e){}
+      localStorage.setItem(KEY,JSON.stringify(S));   /* обратно в открытый вид */
+      closeSheet(); render(); toast("Вход отключён");
+    }catch(e){toast("Не удалось отключить");}
+  };
+  $("#laClose").onclick=closeSheet;
+}
+</script>
+
+<script>
+"use strict";
+/* =====================================================================
    v3: МЕНЮ ДОБАВЛЕНИЯ · ПЕРЕВОДЫ · НАЛИЧНЫЕ · ПЛАН · ОТЧЁТ · ДОСТИЖЕНИЯ
    ===================================================================== */
 
@@ -4635,25 +4869,47 @@ function openDrill(kind){
 }
 
 /* ---------- СТАРТ ПРИЛОЖЕНИЯ (после загрузки всех модулей) ---------- */
-try{
+function bootRest(){
+  try{
+    if(!handleDeepLink(true))welcome();
+    runNotifications();
+    registerSW();
+    syncSummary();
+    setInterval(checkReminders,60000);
+    setInterval(runNotifications,15*60000);
+  }catch(e){}
+}
+function bootNormal(){
   acctLoad();
   render();
   updateSyncBadge();
   if(isLoggedIn())syncNow(true);
-  if(!handleDeepLink(true))welcome();   /* по быстрой ссылке приветствие не мешает */
   checkAchievements(true);
   checkReminders();
-  runNotifications();
-  registerSW();
-  syncSummary();
-  setInterval(checkReminders,60000);
-  setInterval(runNotifications,15*60000);
-}catch(e){
-  /* даже при ошибке приложение не должно оставаться пустым */
-  try{TAB="home";document.getElementById("view").innerHTML=
-    '<div class="card" style="margin-top:16px">'+
-    '<div class="empty"><div class="em">⚠️</div><div style="font-weight:700;color:var(--muted)">Не удалось отрисовать экран</div>'+
-    '<div style="font-size:13px;margin-top:4px">'+String(e.message||e)+'</div></div></div>';}catch(_){}
+  bootLock();
+  bootRest();
 }
-
+(function boot(){
+  try{
+    localLoad();
+    if(localOn()&&storeEncrypted()){
+      acctLoad();
+      if(LOCAL.key){
+        /* пароль «запомнен» — открываем сразу */
+        crypto.subtle.importKey("raw",unb64(LOCAL.key),{name:"AES-GCM"},false,["encrypt","decrypt"])
+          .then(function(k){LOCKKEY=k;return afterUnlock();})
+          .catch(function(){openGateLogin();});
+      }else openGateLogin();
+      return;
+    }
+    bootNormal();
+  }catch(e){
+    try{
+      document.getElementById("view").innerHTML=
+        '<div class="card" style="margin-top:16px"><div class="empty"><div class="em">⚠️</div>'+
+        '<div style="font-weight:700;color:var(--muted)">Не удалось запустить приложение</div>'+
+        '<div style="font-size:13px;margin-top:4px">'+String(e.message||e)+'</div></div></div>';
+    }catch(_){}
+  }
+})();
 </script>
