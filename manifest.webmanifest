@@ -10,7 +10,63 @@
   "theme_color": "#0e1311",
   "lang": "ru",
   "icons": [
-    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
-    { "src": "./apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any maskable" }
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Добавить расход",
+      "short_name": "Расход",
+      "url": "./#expense",
+      "icons": [
+        {
+          "src": "./apple-touch-icon.png",
+          "sizes": "180x180"
+        }
+      ]
+    },
+    {
+      "name": "Добавить доход",
+      "short_name": "Доход",
+      "url": "./#income",
+      "icons": [
+        {
+          "src": "./apple-touch-icon.png",
+          "sizes": "180x180"
+        }
+      ]
+    },
+    {
+      "name": "Перевод",
+      "short_name": "Перевод",
+      "url": "./#transfer",
+      "icons": [
+        {
+          "src": "./apple-touch-icon.png",
+          "sizes": "180x180"
+        }
+      ]
+    },
+    {
+      "name": "Пополнить копилку",
+      "short_name": "Копилка",
+      "url": "./#jar",
+      "icons": [
+        {
+          "src": "./apple-touch-icon.png",
+          "sizes": "180x180"
+        }
+      ]
+    }
   ]
 }

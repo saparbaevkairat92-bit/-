@@ -2970,7 +2970,7 @@ function bootLock(){
   const left=pinLockLeft();
   const draw=(sub)=>mountPad(box,{title:"Введите пин-код",sub:sub||"Копилка защищена",onDone:(pin)=>{
     if(pinLockLeft()>0){padError(box);drawLock();return;}
-    if(pinHash(pin)===S.settings.pin){pinOk();el.classList.remove("on");}
+    if(pinHash(pin)===S.settings.pin){pinOk();el.classList.remove("on");runPendingLink();}
     else{
       const n=pinFail(); padError(box);
       if(pinLockLeft()>0)drawLock();
@@ -2993,7 +2993,7 @@ function bootLock(){
   }
   return true;
 }
-async function tryBio(el,box){const ok=await bioUnlock();if(ok)el.classList.remove("on");}
+async function tryBio(el,box){const ok=await bioUnlock();if(ok){el.classList.remove("on");runPendingLink();}}
 async function bioUnlock(){
   if(!S.settings.bioId||!window.PublicKeyCredential)return false;
   try{
@@ -3035,6 +3035,7 @@ function openSettings(){
     </div>
     <div class="help" style="margin-top:12px">Пин защищает вход и хранится на телефоне в зашифрованном виде. Если забудешь пин — вход можно вернуть только сбросом данных.</div>
     <div style="border-top:1px solid var(--line);margin-top:20px;padding-top:16px;display:flex;flex-direction:column;gap:10px">
+      <button class="btn ghost" id="stQuick">⚡ Быстрые действия</button>
       <button class="btn ghost" id="stAch">🏆 Достижения</button>
       <button class="btn ghost" id="stPlan">📋 Финансовый план</button>
       <button class="btn ghost" id="stOpening">🧮 Начальные остатки</button>
@@ -3051,6 +3052,7 @@ function openSettings(){
   $("#stTheme").onclick=()=>{cycleTheme();openSettings();};
   if(hasPin){$("#stChange").onclick=pinChangeFlow;$("#stOff").onclick=pinOffFlow;if($("#stBio"))$("#stBio").onclick=S.settings.bioId?disableBio:enableBio;}
   else $("#stSet").onclick=pinSetFlow;
+  $("#stQuick").onclick=openQuickActions;
   $("#stAch").onclick=openAchievements;
   $("#stPlan").onclick=openPlan;
   $("#stOpening").onclick=openOpening;
@@ -3711,6 +3713,115 @@ async function openPushSetup(){
 <script>
 "use strict";
 /* =====================================================================
+   БЫСТРЫЕ ДЕЙСТВИЯ / ССЫЛКИ
+   Приложение открывается сразу на нужном экране по ссылке:
+     #expense · #income · #transfer · #cash · #jar · #goal
+     #add · #import · #report · #ops · #stats · #save
+   Это работает с «Касанием задней панели» iPhone, Быстрыми командами,
+   виджетами, ярлыками на экране и кликом по уведомлению.
+   ===================================================================== */
+const DEEP_LINKS={
+  add:        {t:"Меню добавления",   run:()=>openAddMenu()},
+  expense:    {t:"Добавить расход",   run:()=>openTx("expense")},
+  income:     {t:"Добавить доход",    run:()=>openTx("income")},
+  transfer:   {t:"Добавить перевод",  run:()=>openTransferSheet()},
+  cash:       {t:"Наличные",          run:()=>openCashSheet()},
+  jar:        {t:"Пополнить копилку", run:()=>jarMove(ensureJar().id,"in")},
+  goal:       {t:"Создать цель",      run:()=>openJar()},
+  import:     {t:"Загрузить выписку", run:()=>{TAB="ops";render();openImport();}},
+  report:     {t:"Отчёт за неделю",   run:()=>openWeeklyReport()},
+  score:      {t:"Финансовый рейтинг",run:()=>openScore()},
+  ops:        {t:"Операции",          run:()=>{TAB="ops";render();}},
+  stats:      {t:"Аналитика",         run:()=>{TAB="stats";render();}},
+  save:       {t:"Копилки",           run:()=>{TAB="save";render();}},
+  home:       {t:"Главная",           run:()=>{TAB="home";render();}}
+};
+let PENDING_LINK=null;
+
+function linkKey(){
+  let h=(location.hash||"").replace(/^#/,"").trim().toLowerCase();
+  if(!h)return "";
+  h=h.replace(/^add-/,"");                 /* #add-expense == #expense */
+  return DEEP_LINKS[h]?h:"";
+}
+/* Разбираем ссылку. Если стоит пин-код — выполним сразу после разблокировки. */
+function handleDeepLink(){
+  const k=linkKey();
+  if(!k)return false;
+  try{history.replaceState(null,"",location.pathname+location.search);}catch(e){}
+  const locked=$("#lock")&&$("#lock").classList.contains("on");
+  if(locked){PENDING_LINK=k;return true;}
+  runDeepLink(k);
+  return true;
+}
+function runDeepLink(k){
+  const d=DEEP_LINKS[k]; if(!d)return;
+  /* приветственное окно не должно перекрывать быстрое действие */
+  if(!S.seen){S.seen=true;save();}
+  closeSheet();
+  setTimeout(()=>{try{d.run();}catch(e){toast("Не удалось открыть: "+k);}},60);
+}
+function runPendingLink(){
+  if(!PENDING_LINK)return;
+  const k=PENDING_LINK; PENDING_LINK=null;
+  setTimeout(()=>runDeepLink(k),250);
+}
+window.addEventListener("hashchange",handleDeepLink);
+/* приложение вернули из фона по ссылке */
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)handleDeepLink();});
+
+/* ---------- экран «Быстрые действия» ---------- */
+function openQuickActions(){
+  const base=location.origin+location.pathname.replace(/[^/]*$/,"");
+  const keys=["expense","income","transfer","cash","jar","add","import","report"];
+  const row=(k)=>`<div class="row" data-qa="${k}">
+    <div class="av">${{expense:"💸",income:"💰",transfer:"🔄",cash:"💵",jar:"🐷",add:"➕",import:"📄",report:"📊"}[k]}</div>
+    <div class="t"><div class="name">${DEEP_LINKS[k].t}</div>
+      <div class="meta" style="word-break:break-all">${esc(base)}#${k}</div></div>
+    <button class="btn ghost sm" data-copy="${esc(base)}#${k}">Копировать</button></div>`;
+  openSheet(`
+    <h2>⚡ Быстрые действия</h2>
+    <div class="help" style="margin-bottom:14px">Приложение умеет открываться сразу на нужном экране. Ссылку ниже можно повесить на «Касание задней панели» iPhone, Быструю команду или отдельную иконку.</div>
+
+    <div class="section-title" style="margin-top:0">Стук по задней крышке → расход</div>
+    <div class="card" style="padding:14px;margin-bottom:14px">
+      <div class="help" style="line-height:1.7">
+        <b style="color:var(--txt)">1.</b> Открой приложение <b style="color:var(--txt)">«Быстрые команды»</b> → вкладка «Команды» → <b style="color:var(--txt)">＋</b><br>
+        <b style="color:var(--txt)">2.</b> Добавь действие <b style="color:var(--txt)">«Открыть URL»</b> и вставь ссылку «Добавить расход» (кнопка ниже)<br>
+        <b style="color:var(--txt)">3.</b> Назови команду, например <b style="color:var(--txt)">«Расход»</b>, и сохрани<br>
+        <b style="color:var(--txt)">4.</b> Настройки iPhone → <b style="color:var(--txt)">Универсальный доступ</b> → <b style="color:var(--txt)">Касание</b> → <b style="color:var(--txt)">Касание задней панели</b><br>
+        <b style="color:var(--txt)">5.</b> Выбери <b style="color:var(--txt)">«Двойное касание»</b> → пролистай вниз до раздела «Быстрые команды» → выбери свою команду
+      </div>
+      <button class="btn gold" id="qaMain" style="margin-top:12px">Копировать ссылку «Добавить расход»</button>
+    </div>
+
+    <div class="section-title">Все ссылки</div>
+    <div class="card" style="padding:6px 14px">${keys.map(row).join("")}</div>
+
+    <div class="help" style="margin-top:14px">Совет: ссылку можно добавить и на экран «Домой» отдельной иконкой — тогда одно нажатие сразу открывает нужный экран.</div>
+    <div id="qaStatus" class="help" style="margin-top:10px;min-height:18px"></div>
+    <button class="btn ghost" id="qaClose" style="margin-top:12px">Закрыть</button>
+  `);
+  const st=$("#qaStatus");
+  const copy=async(txt)=>{
+    try{await navigator.clipboard.writeText(txt);st.innerHTML='<span class="g">Скопировано: '+esc(txt)+'</span>';}
+    catch(e){
+      const ta=document.createElement("textarea");ta.value=txt;document.body.appendChild(ta);
+      ta.select();try{document.execCommand("copy");st.innerHTML='<span class="g">Скопировано</span>';}
+      catch(_){st.innerHTML='<span class="r">Скопируй вручную: '+esc(txt)+'</span>';}
+      ta.remove();
+    }
+  };
+  $("#qaMain").onclick=()=>copy(base+"#expense");
+  document.querySelectorAll("[data-copy]").forEach(b=>b.onclick=(e)=>{e.stopPropagation();copy(b.dataset.copy);});
+  document.querySelectorAll("[data-qa]").forEach(r=>r.onclick=()=>{closeSheet();runDeepLink(r.dataset.qa);});
+  $("#qaClose").onclick=closeSheet;
+}
+</script>
+
+<script>
+"use strict";
+/* =====================================================================
    v3: МЕНЮ ДОБАВЛЕНИЯ · ПЕРЕВОДЫ · НАЛИЧНЫЕ · ПЛАН · ОТЧЁТ · ДОСТИЖЕНИЯ
    ===================================================================== */
 
@@ -4183,7 +4294,7 @@ function openDrill(kind){
 /* ---------- СТАРТ ПРИЛОЖЕНИЯ (после загрузки всех модулей) ---------- */
 try{
   render();
-  welcome();
+  if(!handleDeepLink())welcome();   /* по быстрой ссылке приветствие не мешает */
   checkAchievements(true);
   checkReminders();
   runNotifications();
