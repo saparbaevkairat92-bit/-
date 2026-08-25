@@ -3781,24 +3781,37 @@ function openQuickActions(){
     <button class="btn ghost sm" data-copy="${esc(base)}#${k}">Копировать</button></div>`;
   openSheet(`
     <h2>⚡ Быстрые действия</h2>
-    <div class="help" style="margin-bottom:14px">Приложение умеет открываться сразу на нужном экране. Ссылку ниже можно повесить на «Касание задней панели» iPhone, Быструю команду или отдельную иконку.</div>
+    <div class="help" style="margin-bottom:14px">Приложение открывается сразу на нужном экране по ссылке. Самый простой способ — отдельная иконка на экране «Домой»: не требует никаких дополнительных приложений.</div>
 
-    <div class="section-title" style="margin-top:0">Стук по задней крышке → расход</div>
+    <div class="section-title" style="margin-top:0">Способ 1 · Отдельная иконка <span class="tag g" style="margin-left:6px">без доп. приложений</span></div>
     <div class="card" style="padding:14px;margin-bottom:14px">
       <div class="help" style="line-height:1.7">
-        <b style="color:var(--txt)">1.</b> Открой приложение <b style="color:var(--txt)">«Быстрые команды»</b> → вкладка «Команды» → <b style="color:var(--txt)">＋</b><br>
-        <b style="color:var(--txt)">2.</b> Добавь действие <b style="color:var(--txt)">«Открыть URL»</b> и вставь ссылку «Добавить расход» (кнопка ниже)<br>
-        <b style="color:var(--txt)">3.</b> Назови команду, например <b style="color:var(--txt)">«Расход»</b>, и сохрани<br>
-        <b style="color:var(--txt)">4.</b> Настройки iPhone → <b style="color:var(--txt)">Универсальный доступ</b> → <b style="color:var(--txt)">Касание</b> → <b style="color:var(--txt)">Касание задней панели</b><br>
-        <b style="color:var(--txt)">5.</b> Выбери <b style="color:var(--txt)">«Двойное касание»</b> → пролистай вниз до раздела «Быстрые команды» → выбери свою команду
+        <b style="color:var(--txt)">1.</b> Скопируй ссылку «Добавить расход» кнопкой ниже<br>
+        <b style="color:var(--txt)">2.</b> Открой <b style="color:var(--txt)">Safari</b>, вставь ссылку в адресную строку и перейди<br>
+        <b style="color:var(--txt)">3.</b> Нажми <b style="color:var(--txt)">«Поделиться»</b> ⬆️ → <b style="color:var(--txt)">«На экран „Домой“»</b><br>
+        <b style="color:var(--txt)">4.</b> Назови иконку <b style="color:var(--txt)">«Расход»</b> → «Добавить»
       </div>
+      <div class="help" style="margin-top:10px">Готово: на экране появится отдельная иконка — одно нажатие сразу открывает ввод расхода.</div>
       <button class="btn gold" id="qaMain" style="margin-top:12px">Копировать ссылку «Добавить расход»</button>
+    </div>
+
+    <div class="section-title">Способ 2 · Стук по задней крышке</div>
+    <div class="card" style="padding:14px;margin-bottom:14px">
+      <div class="help" style="margin-bottom:10px">Нужно приложение <b style="color:var(--txt)">«Быстрые команды»</b> от Apple. Оно встроено в iOS, но его можно удалить — тогда установи заново бесплатно из App Store (поиск: «Быстрые команды»).</div>
+      <div class="help" style="line-height:1.7">
+        <b style="color:var(--txt)">1.</b> «Быстрые команды» → вкладка <b style="color:var(--txt)">«Команды»</b> → <b style="color:var(--txt)">＋</b><br>
+        <b style="color:var(--txt)">2.</b> <b style="color:var(--txt)">«Добавить действие»</b> → найди <b style="color:var(--txt)">«Открыть URL»</b> → вставь ссылку<br>
+        <b style="color:var(--txt)">3.</b> Назови команду <b style="color:var(--txt)">«Расход»</b> и сохрани<br>
+        <b style="color:var(--txt)">4.</b> Настройки iPhone → <b style="color:var(--txt)">Универсальный доступ</b> → <b style="color:var(--txt)">Касание</b> → в самом низу <b style="color:var(--txt)">«Касание задней панели»</b><br>
+        <b style="color:var(--txt)">5.</b> <b style="color:var(--txt)">«Двойное касание»</b> → пролистай до раздела «Быстрые команды» → выбери свою
+      </div>
+      <div class="help" style="margin-top:10px">⚠️ «Касание задней панели» есть только на iPhone 8 и новее с iOS 14+. Если этого пункта нет в настройках — телефон его не поддерживает, используй Способ 1.</div>
     </div>
 
     <div class="section-title">Все ссылки</div>
     <div class="card" style="padding:6px 14px">${keys.map(row).join("")}</div>
 
-    <div class="help" style="margin-top:14px">Совет: ссылку можно добавить и на экран «Домой» отдельной иконкой — тогда одно нажатие сразу открывает нужный экран.</div>
+    <div class="help" style="margin-top:14px">Любую из этих ссылок можно так же вынести отдельной иконкой или повесить на стук по крышке.</div>
     <div id="qaStatus" class="help" style="margin-top:10px;min-height:18px"></div>
     <button class="btn ghost" id="qaClose" style="margin-top:12px">Закрыть</button>
   `);
