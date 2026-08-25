@@ -1,0 +1,20 @@
+name = "kopilka-push"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# Воскресенье 15:00 UTC = 20:00 по Астане (UTC+5).
+# Поменяй, если нужен другой день или часовой пояс.
+[triggers]
+crons = ["0 15 * * 0"]
+
+[vars]
+# Публичный ключ VAPID — его можно хранить открыто.
+VAPID_PUBLIC_KEY = ""
+# Контакт для push-сервисов (требование стандарта).
+VAPID_SUBJECT = "mailto:kajratk001@gmail.com"
+
+# Хранилище подписок. ID подставится командой:
+#   npx wrangler kv namespace create SUBS
+[[kv_namespaces]]
+binding = "SUBS"
+id = ""
