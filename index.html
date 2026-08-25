@@ -270,6 +270,15 @@ body{padding-bottom:calc(112px + env(safe-area-inset-bottom))}
 .qrow .chip{font-variant-numeric:tabular-nums}
 .hidden{display:none!important}
 
+/* значок состояния синхронизации */
+.sync-badge{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;
+  font-size:13px;font-weight:700;align-self:center;
+  background:var(--surface2);border:1px solid var(--line);color:var(--muted)}
+.sync-badge.ok{color:var(--acc);border-color:var(--acc-soft)}
+.sync-badge.sync{color:var(--gold);animation:spin 1s linear infinite}
+.sync-badge.never{color:var(--faint)}
+@keyframes spin{to{transform:rotate(360deg)}}
+
 /* мелочи */
 .link{cursor:pointer}
 .legend .li{cursor:default}
@@ -305,6 +314,7 @@ label.btn{cursor:pointer}
       <span id="brandName">Копилка</span>
     </div>
     <div style="display:flex;gap:8px">
+      <span id="syncBadge" class="sync-badge" style="display:none"></span>
       <button class="icon-btn" id="settingsBtn" aria-label="Настройки">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
@@ -390,6 +400,8 @@ function fresh(){return{
   recurring:[],                     /* регулярные платежи */
   statements:[],                    /* журнал импортированных выписок */
   achievements:{},                  /* достижения: id -> дата получения */
+  deleted:{},                       /* «надгробия»: id удалённого -> когда (для слияния) */
+  updatedAt:0,                      /* когда данные менялись последний раз */
   reports:[],                       /* сохранённые недельные отчёты */
   customCats:{income:[],expense:[]},/* пользовательские категории */
   rules:{merchant:{},counterparty:{},category:{}},
@@ -398,7 +410,10 @@ function fresh(){return{
     notify:{weekly:true,statement:true,goal:true,budget:true,recurring:true,challenge:true}},
   seen:false
 };}
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
+function save(){
+  try{S.updatedAt=Date.now();localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}
+  try{if(typeof autoSync==="function")autoSync();}catch(e){}
+}
 function load(){
   let d=null;
   try{d=JSON.parse(localStorage.getItem(KEY));}catch(e){d=null;}
@@ -428,6 +443,8 @@ function migrate(s){
     if(!Array.isArray(s[k]))s[k]=[];
   if(!s.budgets||typeof s.budgets!=="object")s.budgets={};
   if(!s.achievements||typeof s.achievements!=="object")s.achievements={};
+  if(!s.deleted||typeof s.deleted!=="object")s.deleted={};
+  if(typeof s.updatedAt!=="number")s.updatedAt=0;
   if(!s.customCats)s.customCats={income:[],expense:[]};
 
   /* --- операции --- */
@@ -731,6 +748,7 @@ function render(){
   else if(TAB==="stats")v.innerHTML=viewStats();
   bindView();
   try{syncSummary();}catch(e){}
+  try{updateSyncBadge();}catch(e){}
 }
 
 /* ---------------- HOME ---------------- */
@@ -1715,7 +1733,7 @@ function openTxDetail(id){
     save();render();toast("Категория сохранена");
   };
   const cpBtn=$('#sheet [data-act="cp"]'); if(cpBtn)cpBtn.onclick=()=>openCounterparty(cpBtn.dataset.name);
-  $("#delTx").onclick=()=>{S.transactions=S.transactions.filter(x=>x.id!==id);save();closeSheet();render();toast("Удалено");};
+  $("#delTx").onclick=()=>{markDeleted(id);S.transactions=S.transactions.filter(x=>x.id!==id);save();closeSheet();render();toast("Удалено");};
   $("#closeTx").onclick=closeSheet;
 }
 
@@ -1830,7 +1848,7 @@ function openJar(id){
     };
     if(j)$("#jDel").onclick=()=>{
       if(!confirm("Удалить копилку «"+j.name+"»? История пополнений будет удалена."))return;
-      S.jars=S.jars.filter(x=>x.id!==j.id);
+      markDeleted(j.id);S.jars=S.jars.filter(x=>x.id!==j.id);
       if(!S.jars.length)S.jars.push({id:"main",name:"Накопления",emoji:"🐷",type:"general",target:0,due:"",created:todayISO(),moves:[]});
       save();closeSheet();render();toast("Копилка удалена");
     };
@@ -1982,7 +2000,7 @@ function saveChal(){
 }
 function delChal(id){
   if(!confirm("Удалить челлендж? Отложенные по нему деньги останутся в копилке."))return;
-  S.challenges=S.challenges.filter(c=>c.id!==id);save();render();
+  markDeleted(id);S.challenges=S.challenges.filter(c=>c.id!==id);save();render();
 }
 /* отметка дня челленджа = взнос в копилку (без дублей) */
 function setChalDay(id,i,on){
@@ -2137,7 +2155,7 @@ function openDeposit(id){
     save();closeSheet();render();toast(d?"Сохранено":"Депозит добавлен");
   };
   if(d)$("#dDel").onclick=()=>{if(!confirm("Удалить депозит?"))return;
-    S.deposits=S.deposits.filter(x=>x.id!==d.id);save();closeSheet();render();toast("Удалено");};
+    markDeleted(d.id);S.deposits=S.deposits.filter(x=>x.id!==d.id);save();closeSheet();render();toast("Удалено");};
   $("#dCancel").onclick=closeSheet;
 }
 
@@ -3035,6 +3053,7 @@ function openSettings(){
     </div>
     <div class="help" style="margin-top:12px">Пин защищает вход и хранится на телефоне в зашифрованном виде. Если забудешь пин — вход можно вернуть только сбросом данных.</div>
     <div style="border-top:1px solid var(--line);margin-top:20px;padding-top:16px;display:flex;flex-direction:column;gap:10px">
+      <button class="btn" id="stAcct">☁️ Аккаунт и копия в облаке</button>
       <button class="btn ghost" id="stQuick">⚡ Быстрые действия</button>
       <button class="btn ghost" id="stAch">🏆 Достижения</button>
       <button class="btn ghost" id="stPlan">📋 Финансовый план</button>
@@ -3052,6 +3071,7 @@ function openSettings(){
   $("#stTheme").onclick=()=>{cycleTheme();openSettings();};
   if(hasPin){$("#stChange").onclick=pinChangeFlow;$("#stOff").onclick=pinOffFlow;if($("#stBio"))$("#stBio").onclick=S.settings.bioId?disableBio:enableBio;}
   else $("#stSet").onclick=pinSetFlow;
+  $("#stAcct").onclick=openAccount;
   $("#stQuick").onclick=openQuickActions;
   $("#stAch").onclick=openAchievements;
   $("#stPlan").onclick=openPlan;
@@ -3187,7 +3207,7 @@ function openRecurring(){
   };
   $("#rClose").onclick=closeSheet;
 }
-function delRecurring(id){S.recurring=(S.recurring||[]).filter(r=>r.id!==id);save();closeSheet();render();toast("Удалено");}
+function delRecurring(id){markDeleted(id);S.recurring=(S.recurring||[]).filter(r=>r.id!==id);save();closeSheet();render();toast("Удалено");}
 
 /* ---------- БЫСТРЫЙ РАСХОД ---------- */
 function quickAdd(cat){
@@ -3779,7 +3799,7 @@ function runPendingLink(){
 }
 window.addEventListener("hashchange",()=>handleDeepLink(false));
 /* приложение вернули из фона по ссылке */
-document.addEventListener("visibilitychange",()=>{if(!document.hidden)handleDeepLink(false);});
+document.addEventListener("visibilitychange",()=>{if(!document.hidden){handleDeepLink(false);try{if(isLoggedIn())syncNow(true);}catch(e){}}});
 
 /* ---------- экран «Быстрые действия» ---------- */
 function openQuickActions(){
@@ -3827,6 +3847,307 @@ function openQuickActions(){
   document.querySelectorAll("[data-copy]").forEach(b=>b.onclick=(e)=>{e.stopPropagation();copy(b.dataset.copy);});
   document.querySelectorAll("[data-qa]").forEach(r=>r.onclick=()=>{closeSheet();runDeepLink(r.dataset.qa);});
   $("#qaClose").onclick=closeSheet;
+}
+</script>
+
+<script>
+"use strict";
+/* =====================================================================
+   АККАУНТ И ОБЛАЧНАЯ КОПИЯ
+   Данные шифруются НА ТЕЛЕФОНЕ (AES-GCM). Ключ выводится из пароля
+   и никогда не отправляется. Сервер хранит нечитаемый блок байтов.
+   Пароль тоже не уходит: отправляется производный ключ, от него на
+   сервере хранится ещё один хэш.
+   ===================================================================== */
+const ACCT_KEY="kopilka_acct";
+let ACCT=null;          /* {login, token, version, lastSync, key(base64)} */
+let ENCKEY=null;        /* CryptoKey в памяти */
+
+function acctLoad(){
+  try{ACCT=JSON.parse(localStorage.getItem(ACCT_KEY)||"null");}catch(e){ACCT=null;}
+  return ACCT;
+}
+function acctSave(){try{localStorage.setItem(ACCT_KEY,JSON.stringify(ACCT));}catch(e){}}
+function acctClear(){ACCT=null;ENCKEY=null;try{localStorage.removeItem(ACCT_KEY);}catch(e){}}
+function isLoggedIn(){return !!(ACCT&&ACCT.token&&ACCT.login);}
+function syncUrl(){return (pushCfg().serverUrl||"").replace(/\/+$/,"");}
+
+/* ---------- вывод ключей из пароля ---------- */
+function b64(buf){return btoa(String.fromCharCode.apply(null,new Uint8Array(buf)));}
+function unb64(str){const r=atob(str);const u=new Uint8Array(r.length);for(let i=0;i<r.length;i++)u[i]=r.charCodeAt(i);return u;}
+function hex(buf){return Array.from(new Uint8Array(buf)).map(x=>x.toString(16).padStart(2,"0")).join("");}
+async function deriveKeys(login,password){
+  const enc=new TextEncoder();
+  const salt=await crypto.subtle.digest("SHA-256",enc.encode("kopilka:"+String(login).trim().toLowerCase()));
+  const base=await crypto.subtle.importKey("raw",enc.encode(password),{name:"PBKDF2"},false,["deriveBits"]);
+  /* 64 байта: первые 32 — ключ шифрования, вторые 32 — ключ входа */
+  const bits=await crypto.subtle.deriveBits({name:"PBKDF2",salt,iterations:200000,hash:"SHA-256"},base,512);
+  const raw=new Uint8Array(bits);
+  return{encRaw:raw.slice(0,32), authKey:hex(raw.slice(32,64))};
+}
+async function importEncKey(raw){
+  return crypto.subtle.importKey("raw",raw,{name:"AES-GCM"},false,["encrypt","decrypt"]);
+}
+async function ensureKey(){
+  if(ENCKEY)return ENCKEY;
+  if(ACCT&&ACCT.key){ENCKEY=await importEncKey(unb64(ACCT.key));return ENCKEY;}
+  return null;
+}
+async function encryptBlob(obj){
+  const key=await ensureKey(); if(!key)throw new Error("нет ключа шифрования");
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  const data=new TextEncoder().encode(JSON.stringify(obj));
+  const ct=await crypto.subtle.encrypt({name:"AES-GCM",iv},key,data);
+  const out=new Uint8Array(iv.length+ct.byteLength);
+  out.set(iv,0); out.set(new Uint8Array(ct),iv.length);
+  return b64(out);
+}
+async function decryptBlob(str){
+  const key=await ensureKey(); if(!key)throw new Error("нет ключа шифрования");
+  const all=unb64(str);
+  const ct=await crypto.subtle.decrypt({name:"AES-GCM",iv:all.slice(0,12)},key,all.slice(12));
+  return JSON.parse(new TextDecoder().decode(ct));
+}
+
+/* ---------- сеть ---------- */
+async function api(path,opts){
+  const base=syncUrl();
+  if(!base)throw new Error("не указан адрес сервера");
+  const o=Object.assign({headers:{}},opts||{});
+  o.headers["Content-Type"]="application/json";
+  if(ACCT&&ACCT.token)o.headers["Authorization"]="Bearer "+ACCT.token;
+  const res=await fetch(base+path,o);
+  let j={}; try{j=await res.json();}catch(_){}
+  if(!res.ok){const e=new Error(j.error||("сервер ответил "+res.status));e.status=res.status;e.data=j;throw e;}
+  return j;
+}
+
+/* ---------- СЛИЯНИЕ данных двух устройств ---------- */
+function mergeById(a,b,deleted){
+  const m=new Map();
+  for(const x of (a||[]))if(x&&x.id)m.set(x.id,x);
+  for(const x of (b||[]))if(x&&x.id&&!m.has(x.id))m.set(x.id,x);
+  const out=[];
+  for(const [id,x] of m)if(!deleted[id])out.push(x);
+  return out;
+}
+/* копилки: объединяем и сами взносы внутри каждой копилки */
+function mergeJars(a,b,deleted){
+  const m=new Map();
+  for(const j of (a||[]))if(j&&j.id)m.set(j.id,Object.assign({},j,{moves:(j.moves||[]).slice()}));
+  for(const j of (b||[])){
+    if(!j||!j.id)continue;
+    const cur=m.get(j.id);
+    if(!cur){m.set(j.id,Object.assign({},j,{moves:(j.moves||[]).slice()}));continue;}
+    const seen=new Set(cur.moves.map(x=>x.id));
+    for(const mv of (j.moves||[]))if(mv&&mv.id&&!seen.has(mv.id))cur.moves.push(mv);
+  }
+  const out=[];
+  for(const [id,j] of m){
+    if(deleted[id])continue;
+    j.moves=(j.moves||[]).filter(mv=>!deleted[mv.id]);
+    out.push(j);
+  }
+  return out;
+}
+/* Слияние: ничего не теряем. Удалённое помним по «надгробиям», иначе
+   удалённые операции вернулись бы с другого устройства. */
+function mergeStates(local,remote){
+  const del=Object.assign({},remote.deleted||{},local.deleted||{});
+  const newer=(local.updatedAt||0)>=(remote.updatedAt||0)?local:remote;
+  const out=Object.assign({},newer);
+  out.transactions=mergeById(local.transactions,remote.transactions,del);
+  out.jars=mergeJars(local.jars,remote.jars,del);
+  out.challenges=mergeById(local.challenges,remote.challenges,del);
+  out.deposits=mergeById(local.deposits,remote.deposits,del);
+  out.loans=mergeById(local.loans,remote.loans,del);
+  out.recurring=mergeById(local.recurring,remote.recurring,del);
+  out.statements=mergeById(local.statements,remote.statements,del);
+  out.achievements=Object.assign({},remote.achievements||{},local.achievements||{});
+  out.budgets=Object.assign({},remote.budgets||{},local.budgets||{});
+  out.rules={
+    merchant:Object.assign({},(remote.rules||{}).merchant,(local.rules||{}).merchant),
+    counterparty:Object.assign({},(remote.rules||{}).counterparty,(local.rules||{}).counterparty),
+    category:Object.assign({},(remote.rules||{}).category,(local.rules||{}).category)
+  };
+  out.settings=Object.assign({},remote.settings||{},local.settings||{});
+  out.deleted=del;
+  out.updatedAt=Math.max(local.updatedAt||0,remote.updatedAt||0);
+  out.transactions.sort((x,y)=>(y.ts||0)-(x.ts||0));
+  return out;
+}
+/* пометить удалённое, чтобы оно не вернулось при синхронизации */
+function markDeleted(id){
+  if(!id)return;
+  S.deleted=S.deleted||{};
+  S.deleted[id]=Date.now();
+  const cut=Date.now()-180*864e5;          /* надгробия старше полугода не нужны */
+  for(const k in S.deleted)if(S.deleted[k]<cut)delete S.deleted[k];
+}
+
+/* ---------- операции синхронизации ---------- */
+let SYNCING=false, _cloudT=null;
+function syncState(){
+  if(!isLoggedIn())return "off";
+  if(SYNCING)return "sync";
+  if(!ACCT.lastSync)return "never";
+  return "ok";
+}
+async function syncNow(silent){
+  if(!isLoggedIn())return false;
+  if(SYNCING)return false;
+  SYNCING=true; updateSyncBadge();
+  try{
+    const remote=await api("/sync/pull",{method:"GET"});
+    let merged=S;
+    if(remote.blob){
+      let rs=null;
+      try{rs=await decryptBlob(remote.blob);}
+      catch(e){throw new Error("не удалось расшифровать облачную копию — другой пароль?");}
+      merged=mergeStates(S,migrate(Object.assign(fresh(),rs)));
+    }
+    S=migrate(Object.assign(fresh(),merged));
+    S.updatedAt=Date.now();
+    save();
+    const blob=await encryptBlob(S);
+    let res;
+    try{
+      res=await api("/sync/push",{method:"PUT",body:JSON.stringify({blob,baseVersion:remote.version})});
+    }catch(e){
+      if(e.status===409&&e.data&&e.data.blob){          /* кто-то успел раньше — сливаем ещё раз */
+        const rs2=await decryptBlob(e.data.blob);
+        S=migrate(Object.assign(fresh(),mergeStates(S,migrate(Object.assign(fresh(),rs2)))));
+        S.updatedAt=Date.now(); save();
+        res=await api("/sync/push",{method:"PUT",
+          body:JSON.stringify({blob:await encryptBlob(S),baseVersion:e.data.serverVersion})});
+      }else throw e;
+    }
+    ACCT.version=res.version; ACCT.lastSync=Date.now(); acctSave();
+    render();
+    if(!silent)toast("Синхронизировано ✓");
+    return true;
+  }catch(e){
+    if(!silent)toast(e.message||"Ошибка синхронизации");
+    return false;
+  }finally{SYNCING=false;updateSyncBadge();}
+}
+/* автосинхронизация — с задержкой, чтобы не дёргать сервер на каждое действие */
+function autoSync(){
+  if(!isLoggedIn())return;
+  if(S.settings&&S.settings.autoSync===false)return;
+  clearTimeout(_cloudT);
+  _cloudT=setTimeout(()=>syncNow(true),4000);
+}
+function updateSyncBadge(){
+  const el=$("#syncBadge"); if(!el)return;
+  const st=syncState();
+  el.className="sync-badge "+st;
+  el.textContent={off:"",sync:"↻",never:"•",ok:"✓"}[st]||"";
+  el.style.display=st==="off"?"none":"";
+}
+
+/* ---------- вход / регистрация ---------- */
+async function doAuth(mode,login,password){
+  if(!syncUrl())throw new Error("сначала укажи адрес сервера");
+  if(!validLoginName(login))throw new Error("Логин: 3–32 символа, латиница, цифры, точка, дефис");
+  if((password||"").length<8)throw new Error("Пароль минимум 8 символов");
+  /* запоминаем текущую сессию: неудачная попытка входа не должна её ломать */
+  const prevAcct=ACCT, prevKey=ENCKEY;
+  const{encRaw,authKey}=await deriveKeys(login,password);
+  ACCT={login:String(login).trim().toLowerCase(),token:null,version:0,lastSync:0,key:b64(encRaw)};
+  ENCKEY=await importEncKey(encRaw);
+  let r;
+  try{
+    r=await api("/sync/"+(mode==="register"?"register":"login"),
+      {method:"POST",body:JSON.stringify({login:ACCT.login,authKey})});
+  }catch(e){
+    ACCT=prevAcct; ENCKEY=prevKey;
+    if(prevAcct)acctSave(); else acctClear();
+    throw e;
+  }
+  ACCT.token=r.token; ACCT.version=r.version||0; acctSave();
+  await syncNow(true);
+  return true;
+}
+function validLoginName(s){return /^[a-zA-Z0-9._-]{3,32}$/.test(String(s||"").trim());}
+async function doLogout(){
+  try{await api("/sync/logout",{method:"POST"});}catch(e){}
+  acctClear(); render(); toast("Вышли из аккаунта");
+}
+async function changePassword(oldPass,newPass){
+  if(!isLoggedIn())throw new Error("нужен вход");
+  if((newPass||"").length<8)throw new Error("Новый пароль минимум 8 символов");
+  const old=await deriveKeys(ACCT.login,oldPass);
+  if(b64(old.encRaw)!==ACCT.key)throw new Error("Старый пароль неверный");
+  const nw=await deriveKeys(ACCT.login,newPass);
+  ENCKEY=await importEncKey(nw.encRaw);
+  const blob=await encryptBlob(S);
+  const r=await api("/sync/rekey",{method:"POST",body:JSON.stringify({authKey:nw.authKey,blob})});
+  ACCT.key=b64(nw.encRaw); ACCT.version=r.version; ACCT.lastSync=Date.now(); acctSave();
+  return true;
+}
+
+/* ---------- экран аккаунта ---------- */
+function openAccount(){
+  const cfg=pushCfg();
+  const logged=isLoggedIn();
+  const last=logged&&ACCT.lastSync?ruDateFull(new Date(ACCT.lastSync).toISOString().slice(0,10))
+    +" в "+new Date(ACCT.lastSync).toTimeString().slice(0,5):"ещё не было";
+  openSheet(`
+    <h2>☁️ Аккаунт и копия в облаке</h2>
+    <div class="help" style="margin-bottom:14px">Данные шифруются <b style="color:var(--txt)">на телефоне</b> перед отправкой. Сервер хранит нечитаемый блок — ни я, ни кто-либо с доступом к серверу твои финансы не увидит.</div>
+
+    ${!cfg.serverUrl?`
+    <div class="field"><label>Адрес сервера</label>
+      <input class="inp" id="acUrl" placeholder="https://kopilka-server.xxx.workers.dev" autocomplete="off" value=""></div>
+    <button class="btn ghost" id="acSaveUrl" style="margin-bottom:14px">Сохранить адрес</button>
+    <div class="help" style="margin-bottom:14px">Как поднять свой сервер — в файле <b>push/README.md</b>. Бесплатно, один раз, ~10 минут.</div>`:""}
+
+    ${logged?`
+      <div class="card" style="padding:14px;margin-bottom:14px">
+        <div class="stat"><span class="k">Аккаунт</span><span class="v">${esc(ACCT.login)}</span></div>
+        <div class="stat"><span class="k">Последняя синхронизация</span><span class="v" style="font-size:13px">${last}</span></div>
+        <div class="stat"><span class="k">Операций на устройстве</span><span class="v">${S.transactions.length}</span></div>
+        <div class="stat"><span class="k">Автосинхронизация</span>
+          <input type="checkbox" id="acAuto" ${S.settings.autoSync!==false?"checked":""} style="width:22px;height:22px;accent-color:var(--acc)"></div>
+      </div>
+      <button class="btn" id="acSync" style="margin-bottom:10px">↻ Синхронизировать сейчас</button>
+      <button class="btn ghost" id="acPass" style="margin-bottom:10px">Сменить пароль</button>
+      <button class="btn ghost" id="acOut" style="color:var(--exp)">Выйти из аккаунта</button>
+    `:`
+      ${cfg.serverUrl?`
+      <div class="field"><label>Логин</label>
+        <input class="inp" id="acLogin" placeholder="например kairat" autocomplete="username" autocapitalize="none" spellcheck="false"></div>
+      <div class="field"><label>Пароль</label>
+        <input class="inp" id="acPassIn" type="password" placeholder="минимум 8 символов" autocomplete="current-password"></div>
+      <button class="btn" id="acLoginBtn" style="margin-bottom:10px">Войти</button>
+      <button class="btn ghost" id="acRegBtn">Создать аккаунт</button>
+      <div class="help" style="margin-top:14px">⚠️ Пароль восстановить нельзя — он и есть ключ шифрования. Если забудешь, облачная копия не расшифруется, но данные на телефоне останутся.</div>`:""}
+    `}
+    <div id="acStatus" class="help" style="margin-top:12px;min-height:18px"></div>
+    <button class="btn ghost" id="acClose" style="margin-top:12px">Закрыть</button>
+  `);
+  const st=$("#acStatus");
+  const run=async(fn)=>{try{st.textContent="Подождите…";await fn();st.innerHTML='<span class="g">Готово</span>';setTimeout(openAccount,600);}
+    catch(e){st.innerHTML='<span class="r">'+esc(e.message||String(e))+'</span>';}};
+  if($("#acSaveUrl"))$("#acSaveUrl").onclick=()=>{
+    const u=$("#acUrl").value.trim();
+    const cur=(()=>{try{return JSON.parse(localStorage.getItem("push_cfg")||"{}");}catch(e){return{};}})();
+    cur.serverUrl=u; localStorage.setItem("push_cfg",JSON.stringify(cur));
+    toast("Адрес сохранён"); openAccount();
+  };
+  if($("#acLoginBtn"))$("#acLoginBtn").onclick=()=>run(()=>doAuth("login",$("#acLogin").value,$("#acPassIn").value));
+  if($("#acRegBtn"))$("#acRegBtn").onclick=()=>run(()=>doAuth("register",$("#acLogin").value,$("#acPassIn").value));
+  if($("#acSync"))$("#acSync").onclick=()=>run(()=>syncNow(false));
+  if($("#acAuto"))$("#acAuto").onchange=(e)=>{S.settings.autoSync=e.target.checked;save();
+    toast(e.target.checked?"Автосинхронизация включена":"Автосинхронизация выключена");};
+  if($("#acOut"))$("#acOut").onclick=()=>{if(confirm("Выйти? Данные на телефоне останутся."))doLogout().then(closeSheet);};
+  if($("#acPass"))$("#acPass").onclick=()=>{
+    const o=prompt("Текущий пароль"); if(!o)return;
+    const n=prompt("Новый пароль (минимум 8 символов)"); if(!n)return;
+    run(()=>changePassword(o,n));
+  };
+  $("#acClose").onclick=closeSheet;
 }
 </script>
 
@@ -4304,7 +4625,10 @@ function openDrill(kind){
 
 /* ---------- СТАРТ ПРИЛОЖЕНИЯ (после загрузки всех модулей) ---------- */
 try{
+  acctLoad();
   render();
+  updateSyncBadge();
+  if(isLoggedIn())syncNow(true);
   if(!handleDeepLink(true))welcome();   /* по быстрой ссылке приветствие не мешает */
   checkAchievements(true);
   checkReminders();
