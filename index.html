@@ -6,8 +6,10 @@
 <meta name="apple-mobile-web-app-title" content="Копилка">
 <meta name="theme-color" content="#0e1311">
 <link rel="manifest" href="./manifest.webmanifest">
-<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png">
 <link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="./icon-512.png">
 <script src="./push-config.js"></script>
 <title>Копилка</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -174,6 +176,8 @@ select.inp{appearance:none;-webkit-appearance:none;background-image:url("data:im
 .legend .li .vv{font-weight:700;font-variant-numeric:tabular-nums}
 .banner{display:flex;gap:11px;align-items:center;background:var(--gold-soft);border:1px solid color-mix(in srgb,var(--gold) 35%,transparent);border-radius:16px;padding:13px 15px;margin-bottom:14px}
 .banner.red{background:var(--exp-soft);border-color:color-mix(in srgb,var(--exp) 35%,transparent)}
+.chkrow{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;color:var(--muted);margin-bottom:12px;cursor:pointer;line-height:1.45}
+.chkrow input{width:20px;height:20px;flex:none;margin-top:1px;accent-color:var(--acc)}
 .banner .bt{flex:1;font-size:13px}
 .banner .bt b{display:block;font-size:14px;margin-bottom:1px}
 .daygrid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
@@ -442,6 +446,7 @@ function load(){
 /* ---- ТИПЫ КОПИЛОК ---- */
 const JAR_TYPES={
   general:{ru:"Обычное накопление",em:"🐷"}, cushion:{ru:"Финансовая подушка",em:"🛡"},
+  bills:{ru:"На обязательные платежи",em:"🔒"},
   phone:{ru:"Телефон",em:"📱"}, vacation:{ru:"Отпуск",em:"✈️"}, car:{ru:"Машина",em:"🚗"},
   flat:{ru:"Квартира",em:"🏠"}, study:{ru:"Обучение",em:"📚"}, gift:{ru:"Подарок",em:"🎁"},
   purchase:{ru:"Покупка",em:"🛍"}, repair:{ru:"Ремонт",em:"🔧"}, reserve:{ru:"Резерв",em:"🏦"},
@@ -457,6 +462,11 @@ function migrate(s){
   if(!st.notify)st.notify={weekly:true,statement:true,goal:true,budget:true,recurring:true,challenge:true};
   s.rules=s.rules||{}; s.rules.merchant=s.rules.merchant||{};
   s.rules.counterparty=s.rules.counterparty||{}; s.rules.category=s.rules.category||{};
+  for(const l of (Array.isArray(s.loans)?s.loans:[])){
+    if(!isFinite(+l.amount))l.amount=0;
+    if(!isFinite(+l.interest))l.interest=+l.rate||0;   /* старое имя поля — не теряем процент */
+    l.amount=+l.amount; l.interest=+l.interest;
+  }
   for(const k of ["transactions","jars","challenges","deposits","loans","recurring","statements","reports"])
     if(!Array.isArray(s[k]))s[k]=[];
   if(!s.budgets||typeof s.budgets!=="object")s.budgets={};
@@ -464,6 +474,21 @@ function migrate(s){
   if(!s.deleted||typeof s.deleted!=="object")s.deleted={};
   if(typeof s.updatedAt!=="number")s.updatedAt=0;
   if(!s.customCats)s.customCats={income:[],expense:[]};
+  if(typeof st.billHorizon!=="number")st.billHorizon=30;
+  if(st.notify&&st.notify.bills===undefined)st.notify.bills=true;
+
+  /* --- обязательные платежи: старые записи получают новые поля --- */
+  for(const r of s.recurring){
+    if(!r.id)r.id=uid();
+    if(!r.period)r.period="month";
+    if(typeof r.day!=="number")r.day=+r.day||1;
+    if(r.must===undefined)r.must=MUST_CATS.indexOf(r.category)>=0;
+    if(r.auto===undefined)r.auto=true;
+    if(typeof r.match!=="string")r.match="";
+    if(!r.paid||typeof r.paid!=="object")r.paid={};
+    if(!r.skip||typeof r.skip!=="object")r.skip={};
+    if(!r.created)r.created=todayISO();
+  }
 
   /* --- операции --- */
   for(const t of s.transactions){
@@ -538,7 +563,12 @@ function migrate(s){
 function piggyDeposited(){return savedTotal();}
 function outstandingLoans(){return (S.loans||[]).filter(l=>!l.returned).reduce((a,l)=>a+l.amount,0);}
 function piggyAvailable(){return savedTotal()-outstandingLoans();}
-function loanDue(l){return Math.round(l.amount*(1+l.interest/100));}
+function loanDue(l){
+  const a=+(l&&l.amount)||0;
+  let i=+(l&&l.interest);
+  if(!isFinite(i)||i<0)i=0;          /* старые или повреждённые записи не должны давать NaN */
+  return Math.round(a*(1+i/100));
+}
 function isOverdue(l){return !l.returned && daysBetween(todayISO(),l.due)<0;}
 
 let S=load();
@@ -808,7 +838,7 @@ function viewHome(){
   const cushion=(S.jars||[]).find(j=>j.type==="cushion");
   const chal=(S.challenges||[])[0];
   return `
-  ${banner}${unknownBanner}
+  ${banner}${unknownBanner}${billsBanner()}
   ${statementReminder()}
 
   <div class="hero">
@@ -1639,6 +1669,10 @@ function handle(act,d,e){
   if(act==="goal-open")return openGoalDetail(d.id);
   if(act==="rec-new")return openRecurring();
   if(act==="rec-del")return delRecurring(d.id);
+  if(act==="bill-open")return openBillOcc(d.id,d.key);
+  if(act==="bill-reserve")return billReserveMove();
+  if(act==="bill-add-sug")return addBillFromSug(+d.i);
+  if(act==="bills")return openRecurring();
   if(act==="quick")return quickAdd(d.cat);
   if(act==="jar-new")return openJar();
   if(act==="jar-open")return openJarDetail(d.id);
@@ -1718,9 +1752,15 @@ function saveTx(){
   S.transactions.push(t);
   /* последние использованные категории — для быстрых действий */
   S.settings.recentCats=[draft.category].concat((S.settings.recentCats||[]).filter(c=>c!==draft.category)).slice(0,6);
+  /* если расход вводили из карточки обязательного платежа — закрываем этот период */
+  let billPaid=false;
+  if(draft.billId&&draft.billKey){
+    const r=(S.recurring||[]).find(x=>x.id===draft.billId);
+    if(r){r.paid=r.paid||{}; r.paid[draft.billKey]=draft.date||todayISO(); billPaid=true;}
+  }
   save();closeSheet();render();
   celebrate(draft.type==="income"?"💚":"💸");
-  toast(draft.type==="income"?"Доход добавлен ✓":"Расход добавлен ✓");
+  toast(billPaid?"Платёж закрыт ✓":draft.type==="income"?"Доход добавлен ✓":"Расход добавлен ✓");
 }
 function openTxDetail(id){
   const t=S.transactions.find(x=>x.id===id);if(!t)return;
@@ -1927,7 +1967,7 @@ function openJarDetail(id){
 }
 /* пополнить / снять — виртуально, баланс кошелька НЕ меняется */
 function ensureJar(){if(!S.jars||!S.jars.length)S.jars=[{id:"main",name:"Накопления",emoji:"🐷",type:"general",target:0,due:"",created:todayISO(),moves:[]}];return S.jars[0];}
-function jarMove(id,type){
+function jarMove(id,type,preset){
   ensureJar();
   const j=S.jars.find(x=>x.id===id)||S.jars[0]; if(!j)return;
   const ms=moneyState();
@@ -1937,7 +1977,7 @@ function jarMove(id,type){
       ? `Свободно сейчас: <b class="g">${money(ms.available)}</b>. Деньги останутся в кошельке — это только распределение.`
       : `В копилке «${esc(j.name)}»: <b class="y">${money(jarCurrent(j))}</b>.`}</div>
     <div class="amt-wrap"><div class="amt-lbl">Сколько?</div>
-      <div class="amt-line"><input class="big-amt num" id="jmAmt" type="text" inputmode="numeric" enterkeyhint="done" autocomplete="off" placeholder="0"><span class="amt-cur">₸</span></div></div>
+      <div class="amt-line"><input class="big-amt num" id="jmAmt" type="text" inputmode="numeric" enterkeyhint="done" autocomplete="off" placeholder="0" value="${preset?fmtInput(String(Math.round(preset))):''}"><span class="amt-cur">₸</span></div></div>
     ${quickAmountRow("jmAmt")}
     <div class="field" style="margin-top:14px"><label>Заметка</label><input class="inp" id="jmNote" placeholder="необязательно"></div>
     <button class="btn ${type==="in"?"gold":"ghost"}" id="jmSave">${type==="in"?"Отложить":"Снять"}</button>
@@ -2236,6 +2276,7 @@ function repay(id){
 /* ----- reminders / notifications ----- */
 function checkReminders(){
   try{checkStatementReminder();}catch(e){}
+  try{billNotify();}catch(e){}
   const over=S.loans.filter(isOverdue);
   if(over.length && "Notification" in window && Notification.permission==="granted"){
     for(const l of over){
@@ -3090,7 +3131,7 @@ function openSettings(){
       <button class="btn ghost" id="stNotify">🔔 Уведомления</button>
       <button class="btn ghost" id="stBackup">💾 Резервная копия</button>
       <button class="btn ghost" id="stBudget">🎯 Бюджеты по категориям</button>
-      <button class="btn ghost" id="stRec">📄 Регулярные платежи</button>
+      <button class="btn ghost" id="stRec">🔒 Обязательные платежи</button>
     </div>
     <div style="border-top:1px solid var(--line);margin-top:16px;padding-top:16px">
       <button class="btn ghost" id="stReset" style="color:var(--exp)">Сбросить все данные</button>
@@ -3184,60 +3225,490 @@ function openBudgets(){
   $("#budClose").onclick=closeSheet;
 }
 
-/* ---------- РЕГУЛЯРНЫЕ ПЛАТЕЖИ ---------- */
-function upcomingBlock(){
-  const rs=S.recurring||[];
-  if(!rs.length)return "";
-  const withNext=rs.map(r=>({r,next:nextDue(r)})).sort((a,b)=>a.next<b.next?-1:1).slice(0,4);
-  return `<div class="section-title" style="display:flex;justify-content:space-between">📄 Предстоящие платежи <span class="link" data-act="rec-new">＋</span></div>
-  <div class="card" style="padding:6px 14px">
-    ${withNext.map(({r,next})=>{
-      const dd=daysBetween(todayISO(),next);
-      return `<div class="row">
-        <div class="av">${EMO[r.category]||"📄"}</div>
-        <div class="t"><div class="name">${esc(r.name)}</div>
-          <div class="meta">${r.period==="month"?"каждый месяц":r.period==="week"?"каждую неделю":"каждый год"} · ${dd<=0?"сегодня":"через "+dd+" "+plural(dd,"день","дня","дней")}</div></div>
-        <div class="amt r">−${fmt(r.amount)}</div>
-      </div>`;}).join("")}
+/* =====================================================================
+   ОБЯЗАТЕЛЬНЫЕ ПЛАТЕЖИ  (кредиты, аренда, связь, коммунальные…)
+
+   Логика простая и честная:
+     1. У каждого платежа есть период (месяц/неделя/год) и число списания.
+        Для каждого периода считается СВОЙ срок — «событие» (occurrence).
+     2. Событие считается ОПЛАЧЕННЫМ, если рядом со сроком нашлась подходящая
+        операция расхода, либо пользователь отметил вручную.
+     3. Складываются только НЕоплаченные обязательные события: просроченные
+        плюс те, что наступят в горизонте (по умолчанию 30 дней). Это и есть
+        «сколько нужно денег».
+     4. «Сколько есть» = свободные деньги + то, что уже лежит в копилке
+        «На обязательные платежи» (она — часть отложенного, поэтому её
+        прибавляем обратно, чтобы не считать деньги дважды).
+     5. Не хватает → считаем нехватку и делим на дни до первого срока,
+        который нечем закрыть. Получается «откладывай столько в день».
+   ===================================================================== */
+
+/* категории, которые по умолчанию считаются обязательными */
+const BILL_LOOKBACK=45;   /* на сколько дней назад ищем просрочку */
+const MUST_CATS=["Кредит","Жильё","Коммунальные","Связь","Подписки","Образование","Здоровье"];
+
+function addDaysISO(iso,n){const d=new Date(iso+"T00:00:00");d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);}
+function monthEndISO(mk){const y=+mk.slice(0,4),m=+mk.slice(5,7);return mk+"-"+String(new Date(y,m,0).getDate()).padStart(2,"0");}
+function billHorizon(){const h=+(S.settings&&S.settings.billHorizon);return h>=7&&h<=90?h:30;}
+function billNorm(s){return String(s||"").toLowerCase().replace(/ё/g,"е").replace(/[^a-zа-я0-9]+/g," ").trim();}
+function billWords(s){return billNorm(s).split(" ").filter(w=>w.length>2);}
+function billIsMust(r){return r.must===undefined?MUST_CATS.includes(r.category):!!r.must;}
+function billPerRu(r){return r.period==="week"?"каждую неделю":r.period==="year"?"каждый год":"каждый месяц";}
+
+/* ---------- периоды ---------- */
+function billPeriodKey(r,iso){
+  if(r.period==="week"){
+    const d=new Date(iso+"T00:00:00");
+    d.setDate(d.getDate()-((d.getDay()+6)%7));      /* к понедельнику */
+    return "W"+d.toISOString().slice(0,10);
+  }
+  if(r.period==="year")return iso.slice(0,4);
+  return iso.slice(0,7);
+}
+function billNextKey(r,key,step){
+  step=(step===undefined)?1:step;
+  if(r.period==="week")return "W"+addDaysISO(key.slice(1),7*step);
+  if(r.period==="year")return String(+key+step);
+  const d=new Date(+key.slice(0,4),+key.slice(5,7)-1+step,1);
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
+}
+/* срок платежа внутри периода */
+function billDueIn(r,key){
+  if(r.period==="week"){
+    let dw=+r.day; if(!isFinite(dw))dw=1;           /* 0 = воскресенье, поэтому не ||1 */
+    const dow=Math.min(6,Math.max(0,dw));
+    return addDaysISO(key.slice(1),(dow+6)%7);      /* смещение от понедельника */
+  }
+  if(r.period==="year"){
+    const m=Math.min(12,Math.max(1,+r.month||1));
+    const last=new Date(+key,m,0).getDate();
+    return key+"-"+String(m).padStart(2,"0")+"-"+String(Math.min(Math.max(1,+r.day||1),last)).padStart(2,"0");
+  }
+  const last=new Date(+key.slice(0,4),+key.slice(5,7),0).getDate();
+  return key+"-"+String(Math.min(Math.max(1,+r.day||1),last)).padStart(2,"0");
+}
+/* ближайший будущий срок — используется в старых местах */
+function nextDue(r){
+  const t=todayISO();
+  let key=billPeriodKey(r,t);
+  for(let i=0;i<400;i++){
+    const due=billDueIn(r,key);
+    if(due>=t)return due;
+    key=billNextKey(r,key,1);
+  }
+  return t;
+}
+
+/* ---------- поиск операции, которой платёж уже закрыт ---------- */
+function billWindow(r,due){
+  const back=r.period==="week"?3:r.period==="year"?20:10;
+  const fwd =r.period==="week"?3:r.period==="year"?20:12;
+  return[addDaysISO(due,-back),addDaysISO(due,fwd)];
+}
+function billTxMatch(r,t){
+  if(!(txEffect(t).exp>0))return false;                     /* только реальный отток */
+  const words=billWords(r.match||r.name);
+  const hay=billNorm([t.counterparty,t.merchant,t.note,t.category].filter(Boolean).join(" "));
+  if(words.length&&words.every(w=>hay.indexOf(w)>=0))return true;
+  if(r.category&&t.category===r.category&&r.amount)
+    return Math.abs(t.amount-r.amount)<=Math.max(r.amount*0.2,300);
+  return false;
+}
+function billFindTx(r,due){
+  if(r.auto===false)return null;
+  const w=billWindow(r,due), t2=todayISO();
+  const to=t2<w[1]?t2:w[1];
+  let best=null;
+  for(const t of S.transactions){
+    if(t.date<w[0]||t.date>to)continue;
+    if(!billTxMatch(r,t))continue;
+    const s=Math.abs(t.amount-(r.amount||0));
+    if(!best||s<best.s)best={t,s};
+  }
+  return best?best.t:null;
+}
+
+/* ---------- одно событие платежа ---------- */
+function billOcc(r,key){
+  const due=billDueIn(r,key), today=todayISO();
+  const skipped=!!(r.skip&&r.skip[key]);
+  const manual=!!(r.paid&&r.paid[key]);
+  const tx=(skipped||manual)?null:billFindTx(r,due);
+  const paid=manual||!!tx;
+  const status=skipped?"skip":paid?"paid":due<today?"overdue":due===today?"today":"upcoming";
+  return{r,key,due,paid,tx,manual,skipped,status,
+    amount:tx?tx.amount:(r.amount||0),
+    days:daysBetween(today,due),must:billIsMust(r)};
+}
+/* все события в диапазоне дат */
+/* дата, раньше которой платежа не существовало: за неё нечего требовать */
+function billSince(r){return r.start||r.created||"";}
+function billOccurrences(fromISO,toISO){
+  const out=[];
+  for(const r of (S.recurring||[])){
+    if(r.archived)continue;
+    const since=billSince(r);
+    let key=billPeriodKey(r,fromISO);
+    for(let i=0;i<400;i++){
+      const due=billDueIn(r,key);
+      if(due>toISO)break;
+      /* Платёж, добавленный сегодня, НЕ делает человека должником за прошлые
+         месяцы — считаем только начиная с даты появления платежа. */
+      if(due>=fromISO&&(!since||due>=since)&&(!r.end||due<=r.end))out.push(billOcc(r,key));
+      key=billNextKey(r,key,1);
+    }
+  }
+  return out.sort((a,b)=>a.due<b.due?-1:a.due>b.due?1:0);
+}
+
+/* ---------- копилка «На обязательные платежи» ---------- */
+function billsJar(){return (S.jars||[]).find(j=>j.type==="bills")||null;}
+function billsReserve(){const j=billsJar();return j?jarCurrent(j):0;}
+function ensureBillsJar(){
+  let j=billsJar();
+  if(!j){
+    j={id:uid(),name:"На обязательные платежи",emoji:"🔒",type:"bills",target:0,due:"",created:todayISO(),moves:[]};
+    S.jars.push(j); save();
+  }
+  return j;
+}
+
+/* ---------- главный расчёт ---------- */
+/* Просрочки: берём только САМУЮ СВЕЖУЮ неоплаченную по каждому платежу.
+   Если платёж не отмечался месяцами, это почти всегда пробел в данных, а не
+   долг в тройном размере — раздувать сумму и пугать человека нечестно.
+   Более старые периоды считаем отдельно и показываем как повод проверить. */
+function billsOverdue(){
+  const today=todayISO();
+  const all=billOccurrences(addDaysISO(today,-BILL_LOOKBACK),addDaysISO(today,-1))
+    .filter(o=>o.must&&o.status==="overdue");
+  const last={},stale=[];
+  for(const o of all){
+    const p=last[o.r.id];
+    if(!p||o.due>p.due){ if(p)stale.push(p); last[o.r.id]=o; }
+    else stale.push(o);
+  }
+  return{list:Object.keys(last).map(k=>last[k]).sort((a,b)=>a.due<b.due?-1:1),stale};
+}
+function billsPlan(days){
+  const today=todayISO(), horizon=days||billHorizon();
+  const to=addDaysISO(today,horizon);
+  const od=billsOverdue(), overdue=od.list;
+  const ahead=billOccurrences(today,to)
+    .filter(o=>o.must&&o.status!=="paid"&&o.status!=="skip");
+  const list=overdue.concat(ahead);
+  const need=list.reduce((a,o)=>a+o.amount,0);
+  const ms=moneyState(), reserve=billsReserve();
+  const have=ms.available+reserve;
+  let bal=have, firstShort=null;
+  for(const o of list){bal-=o.amount; if(bal<0&&!firstShort)firstShort=o;}
+  const deficit=Math.max(0,need-have);
+  const deadlineDays=firstShort?Math.max(0,daysBetween(today,firstShort.due)):0;
+  const perDay=deficit>0?Math.ceil(deficit/Math.max(1,deadlineDays)):0;
+  /* прогресс текущего месяца */
+  const mk=curMonth();
+  const inMonth=billOccurrences(mk+"-01",monthEndISO(mk)).filter(o=>o.must&&o.status!=="skip");
+  const monthSum=inMonth.reduce((a,o)=>a+o.amount,0);
+  const paidSum=inMonth.filter(o=>o.status==="paid").reduce((a,o)=>a+o.amount,0);
+  return{list,overdue,stale:od.stale,ahead,need,have,reserve,available:ms.available,
+    deficit,perDay,firstShort,deadlineDays,horizon,horizonEnd:to,
+    monthSum,paidSum,monthLeft:Math.max(0,monthSum-paidSum),
+    covered:deficit<=0,after:Math.max(0,ms.available-Math.max(0,need-reserve)),
+    coverage:need>0?Math.min(100,Math.round(have/need*100)):100};
+}
+
+/* лента: просрочка + весь текущий месяц + горизонт (без повторов) */
+function billsFeed(){
+  const today=todayISO(), mk=curMonth();
+  const a=billOccurrences(addDaysISO(today,-62),addDaysISO(today,-1)).filter(o=>o.status==="overdue");
+  const b=billOccurrences(mk+"-01",monthEndISO(mk));
+  const c=billOccurrences(today,addDaysISO(today,billHorizon()));
+  const seen={},out=[];
+  const fresh2=billsOverdue().list.map(o=>o.r.id+"|"+o.key);
+  for(const o of a.concat(b,c)){
+    const k=o.r.id+"|"+o.key;
+    if(seen[k])continue;
+    /* устаревшие просрочки в ленту не сыпем — только самую свежую по платежу */
+    if(o.status==="overdue"&&fresh2.indexOf(k)<0)continue;
+    seen[k]=1; out.push(o);
+  }
+  return out.sort((x,y)=>x.due<y.due?-1:x.due>y.due?1:0);
+}
+
+/* ---------- подсказки: что похоже на регулярный платёж ---------- */
+let BILL_SUG=[];
+function billSuggestions(){
+  const today=todayISO(), from=addDaysISO(today,-190), groups={};
+  for(const t of S.transactions){
+    if(t.date<from)continue;
+    if(!(txEffect(t).exp>0))continue;
+    if(t.operationType===OP.TRANSFER_OUT||t.operationType===OP.FEE)continue;
+    const name=String(t.counterparty||t.merchant||t.note||"").trim();
+    if(name.length<3)continue;
+    const key=billWords(name).slice(0,3).join(" ");
+    if(!key)continue;
+    (groups[key]=groups[key]||{name,items:[]}).items.push(t);
+  }
+  const have=(S.recurring||[]).map(r=>billWords(r.match||r.name).slice(0,3).join(" "));
+  const out=[];
+  for(const k in groups){
+    if(have.indexOf(k)>=0)continue;
+    const g=groups[k];
+    const months=Array.from(new Set(g.items.map(t=>monthKey(t.date)))).sort();
+    if(months.length<2)continue;                       /* минимум два разных месяца */
+    if(months[months.length-1]<monthKey(addDaysISO(today,-62)))continue;  /* не заброшенный */
+    const amts=g.items.map(t=>t.amount).sort((a,b)=>a-b);
+    const amount=Math.round(amts[Math.floor(amts.length/2)]);
+    if(amount<300)continue;
+    const days=g.items.map(t=>+t.date.slice(8,10)).sort((a,b)=>a-b);
+    const day=days[Math.floor(days.length/2)];
+    const last=g.items[g.items.length-1];
+    out.push({name:g.name,amount,day,months:months.length,match:k,
+      category:last.category,must:MUST_CATS.includes(last.category),
+      score:months.length*1e6+amount});
+  }
+  return out.sort((a,b)=>b.score-a.score).slice(0,8);
+}
+
+/* ---------- ГЛАВНЫЙ ЭКРАН ---------- */
+function billsBanner(){
+  if(!(S.recurring||[]).length)return "";
+  const bp=billsPlan();
+  if(bp.overdue.length){
+    const o=bp.overdue[0], late=-o.days;
+    return `<div class="banner red"><span style="font-size:22px">🔴</span>
+      <div class="bt"><b>Просрочен обязательный платёж</b>${esc(o.r.name)} — ${money(o.amount)}, срок был ${ruDateFull(o.due)} (${late} ${plural(late,"день","дня","дней")} назад)${bp.overdue.length>1?` · и ещё ${bp.overdue.length-1}`:""}</div>
+      <button class="btn danger sm" data-act="bill-open" data-id="${o.r.id}" data-key="${o.key}">Открыть</button></div>`;
+  }
+  if(bp.deficit>0){
+    const a=billAdvice(bp);
+    return `<div class="banner"><span style="font-size:22px">🔒</span>
+      <div class="bt"><b>Не хватает на обязательные платежи</b>${a.text}</div>
+      <button class="btn gold sm" data-act="bill-reserve">Отложить</button></div>`;
+  }
+  return "";
+}
+
+/* Совет одной фразой. Срок в прошлом — «в день» бессмысленно, нужно сейчас. */
+function billAdvice(bp){
+  if(bp.covered)return{now:false,text:"Всё закрыто."};
+  const due=bp.firstShort.due, today=todayISO();
+  if(due<today)return{now:true,
+    text:`Нужно найти <b class="r">${money(bp.deficit)}</b> — срок платежа «${esc(bp.firstShort.r.name)}» уже прошёл (${ruDateFull(due)}).`};
+  if(due===today)return{now:true,
+    text:`Нужно <b class="r">${money(bp.deficit)}</b> уже сегодня — «${esc(bp.firstShort.r.name)}» списывается сегодня.`};
+  const d=bp.deadlineDays;
+  return{now:false,
+    text:`Чтобы закрыть всё вовремя, откладывай <b class="y">${money(bp.perDay)} в день</b> ближайшие ${d} ${plural(d,"день","дня","дней")} — до ${ruDateFull(due)}.`};
+}
+function billStatusText(o){
+  if(o.skipped)return "Пропущено в этом периоде";
+  if(o.paid)return (o.tx?"Оплачено "+ruDate(o.tx.date):"Отмечено оплаченным")+" · "+billPerRu(o.r);
+  if(o.status==="overdue")return "Просрочено на "+(-o.days)+" "+plural(o.days,"день","дня","дней")+" · было "+ruDateFull(o.due);
+  if(o.status==="today")return "Списание сегодня";
+  return "Через "+o.days+" "+plural(o.days,"день","дня","дней")+" · "+ruDateFull(o.due);
+}
+function billRow(o){
+  const cls=o.skipped?"":o.paid?"g":o.status==="overdue"?"r":o.status==="today"?"y":"";
+  const mark=o.skipped?"⏭":o.paid?"✓":o.status==="overdue"?"⚠️":"";
+  return `<div class="row" data-act="bill-open" data-id="${o.r.id}" data-key="${o.key}" style="cursor:pointer">
+    <div class="av">${o.r.emoji||EMO[o.r.category]||"📄"}</div>
+    <div class="t"><div class="name">${esc(o.r.name)}${o.must?"":' <span style="color:var(--faint);font-weight:500;font-size:11.5px">(необязательный)</span>'}</div>
+      <div class="meta">${mark?mark+" ":""}${billStatusText(o)}</div></div>
+    <div class="amt ${cls}" style="${o.paid||o.skipped?"opacity:.55":""}">${o.paid?"":"−"}${fmt(o.amount)}</div>
   </div>`;
 }
-function nextDue(r){
-  const t=new Date(todayISO()+"T00:00:00");
-  if(r.period==="week"){const d=new Date(t);const add=((r.day-d.getDay())+7)%7;d.setDate(d.getDate()+add);return d.toISOString().slice(0,10);}
-  const d=new Date(t.getFullYear(),t.getMonth(),Math.min(r.day||1,28));
-  if(d<t)d.setMonth(d.getMonth()+(r.period==="year"?12:1));
-  return d.toISOString().slice(0,10);
-}
-function openRecurring(){
-  openSheet(`
-    <h2>Регулярный платёж</h2>
-    <div class="field"><label>Название</label><input class="inp" id="rName" placeholder="Напр. Интернет"></div>
-    <div class="field"><label>Сумма, ₸</label><input class="inp num" id="rAmt" type="text" inputmode="numeric" autocomplete="off" enterkeyhint="next" placeholder="5 000"></div>
-    <div class="field"><label>Категория</label><select class="inp" id="rCat">${EXP_CATS.map(([c,em])=>`<option value="${c}">${em} ${c}</option>`).join("")}</select></div>
-    <div class="split2">
-      <div class="field"><label>Период</label><select class="inp" id="rPer"><option value="month">Каждый месяц</option><option value="week">Каждую неделю</option><option value="year">Каждый год</option></select></div>
-      <div class="field"><label>Число / день</label><input class="inp num" id="rDay" type="text" inputmode="numeric" autocomplete="off" placeholder="27"></div>
+
+function billsBlock(){
+  const rs=(S.recurring||[]).filter(r=>!r.archived);
+  if(!rs.length){
+    BILL_SUG=billSuggestions();
+    return `<div class="section-title">🔒 Обязательные платежи</div>
+    <div class="card">
+      <div class="help" style="margin-bottom:12px">Добавь кредиты, аренду, связь, коммунальные — приложение само посчитает, <b>сколько нужно держать</b> и <b>сколько откладывать в день</b>, чтобы всё закрыть вовремя, и предупредит, если денег не хватает.</div>
+      ${BILL_SUG.length?`<div class="help" style="margin-bottom:8px">Похоже, это повторяется у тебя каждый месяц:</div>
+      <div class="card" style="padding:2px 12px;margin-bottom:12px">${BILL_SUG.slice(0,4).map((s,i)=>`
+        <div class="row"><div class="av">${EMO[s.category]||"📄"}</div>
+          <div class="t"><div class="name">${esc(s.name)}</div>
+            <div class="meta">≈ ${money(s.amount)} · ${s.months} ${plural(s.months,"месяц","месяца","месяцев")} · обычно ${s.day}-го</div></div>
+          <button class="chip on" data-act="bill-add-sug" data-i="${i}">＋</button></div>`).join("")}</div>`:""}
+      <button class="btn" data-act="rec-new">＋ Добавить платёж</button>
+    </div>`;
+  }
+  const bp=billsPlan(), feed=billsFeed();
+  const pct=bp.monthSum?Math.min(100,Math.round(bp.paidSum/bp.monthSum*100)):0;
+  return `<div class="section-title" style="display:flex;justify-content:space-between">🔒 Обязательные платежи <span class="link" data-act="rec-new">Настроить</span></div>
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+      <div>
+        <div style="font-size:12px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em;font-weight:700">Нужно на ${bp.horizon} ${plural(bp.horizon,"день","дня","дней")}</div>
+        <div class="${bp.covered?"g":"r"}" style="font-family:'Bricolage Grotesque';font-weight:800;font-size:26px;margin-top:2px">${fmt(bp.need)} ₸</div>
+      </div>
+      <div style="text-align:right">
+        <div class="help">есть ${money(bp.have)}${bp.reserve?`<br>в резерве ${money(bp.reserve)}`:""}</div>
+        <div class="${bp.covered?"g":"r"}" style="font-size:12.5px;font-weight:700;margin-top:3px">${bp.covered?"✓ хватает":"не хватает "+money(bp.deficit)}</div>
+      </div>
     </div>
+    <div class="bar ${bp.covered?"":"gold"}" style="margin:11px 0 8px"><i style="width:${bp.coverage}%"></i></div>
+    <div class="help">${bp.covered
+      ? `Всё закрыто. После обязательных платежей останется <b class="g">${money(bp.after)}</b> свободных.`
+      : billAdvice(bp).text}</div>
+    ${bp.stale.length?`<div class="help" style="margin-top:6px">⚠️ Ещё ${bp.stale.length} ${plural(bp.stale.length,"период","периода","периодов")} за прошлые месяцы не отмечены. Если ты их платил — загрузи выписку или отметь вручную, иначе расчёт будет неточным.</div>`:""}
+    ${bp.monthSum?`<div class="help" style="margin-top:6px">В этом месяце оплачено ${money(bp.paidSum)} из ${money(bp.monthSum)}${bp.monthLeft?` · осталось ${money(bp.monthLeft)}`:" · всё закрыто ✓"} (${pct}%)</div>`:""}
+    <div style="margin:12px -14px -6px">
+      <div class="card" style="padding:2px 14px;border:0;background:transparent">${feed.map(billRow).join("")}</div>
+    </div>
+    ${bp.covered
+      ? `<button class="btn ghost" data-act="bill-reserve" style="margin-top:8px">🔒 Отложить ${money(Math.max(0,bp.need-bp.reserve))} в резерв</button>`
+      : `<button class="btn gold" data-act="bill-reserve" style="margin-top:8px">🔒 Отложить в резерв</button>`}
+  </div>`;
+}
+/* старое имя блока — чтобы ничего не сломалось */
+function upcomingBlock(){return billsBlock();}
+
+/* ---------- карточка одного события ---------- */
+function openBillOcc(id,key){
+  const r=(S.recurring||[]).find(x=>x.id===id); if(!r)return;
+  const o=billOcc(r,key);
+  openSheet(`
+    <h2>${r.emoji||EMO[r.category]||"📄"} ${esc(r.name)}</h2>
+    <div class="hero" style="padding:16px;margin-bottom:14px">
+      <div class="lbl">${o.paid?"Оплачено":o.status==="overdue"?"Просрочено":"К оплате"}</div>
+      <div class="bal ${o.paid?"g":o.status==="overdue"?"r":"y"}" style="font-size:clamp(24px,8vw,32px)">${fmt(o.amount)} <span class="cur">₸</span></div>
+      <div class="sub">${billStatusText(o)}</div>
+    </div>
+    ${o.tx?`<div class="help" style="margin-bottom:12px">Найдена операция на ${money(o.tx.amount)} от ${ruDateFull(o.tx.date)} — платёж засчитан автоматически.</div>
+      <button class="btn ghost" data-bill="tx" style="margin-bottom:10px">🧾 Открыть операцию</button>`:""}
+    ${(!o.paid&&!o.skipped)?`
+      <button class="btn" data-bill="pay">💸 Записать расход и закрыть</button>
+      <button class="btn ghost" data-bill="mark" style="margin-top:10px">✓ Просто отметить оплаченным</button>
+      <button class="btn ghost" data-bill="skip" style="margin-top:10px">⏭ Пропустить в этом периоде</button>`:""}
+    ${o.manual?`<button class="btn ghost" data-bill="unmark" style="margin-top:10px">↩︎ Снять отметку об оплате</button>`:""}
+    ${o.skipped?`<button class="btn ghost" data-bill="unskip" style="margin-top:10px">↩︎ Вернуть в план</button>`:""}
+    <div class="help" style="margin:12px 0">${billPerRu(r)}${r.period==="month"?", "+Math.min(31,Math.max(1,+r.day||1))+"-го числа":""} · ${money(r.amount)} · ${billIsMust(r)?"обязательный":"необязательный"}</div>
+    <button class="btn ghost" data-bill="edit">✏️ Изменить платёж</button>
+    <button class="btn ghost" data-bill="del" style="margin-top:10px;color:var(--exp)">🗑 Удалить платёж</button>
+    <button class="btn ghost" data-bill="close" style="margin-top:10px">Закрыть</button>
+  `);
+  const on=(k,fn)=>{const b=document.querySelector('#sheet [data-bill="'+k+'"]'); if(b)b.onclick=fn;};
+  on("tx",()=>openTxDetail(o.tx.id));
+  on("pay",()=>{
+    closeSheet(); openTx("expense");
+    draft.amount=String(r.amount||""); draft.category=r.category||"Другое";
+    draft.note=r.name; draft.date=todayISO();
+    draft.billId=r.id; draft.billKey=key;
+    renderTxSheet();
+  });
+  on("mark",()=>{r.paid=r.paid||{}; r.paid[key]=todayISO(); save(); closeSheet(); render(); toast("Отмечено оплаченным");});
+  on("unmark",()=>{if(r.paid)delete r.paid[key]; save(); closeSheet(); render(); toast("Отметка снята");});
+  on("skip",()=>{r.skip=r.skip||{}; r.skip[key]=1; save(); closeSheet(); render(); toast("Пропущено");});
+  on("unskip",()=>{if(r.skip)delete r.skip[key]; save(); closeSheet(); render(); toast("Вернул в план");});
+  on("edit",()=>openRecurring(r.id));
+  on("del",()=>delRecurring(r.id));
+  on("close",closeSheet);
+}
+
+/* ---------- добавление / изменение платежа ---------- */
+function openRecurring(id){
+  const ed=id?(S.recurring||[]).find(r=>r.id===id):null;
+  const cur=ed||{period:"month",day:1,must:true,auto:true,category:"Кредит",amount:0,name:""};
+  if(!id)BILL_SUG=billSuggestions();
+  const sug=id?[]:BILL_SUG;
+  openSheet(`
+    <h2>${ed?"Изменить платёж":"Обязательный платёж"}</h2>
+    <div class="help" style="margin-bottom:14px">Кредит, аренда, связь, коммунальные, подписки. Приложение будет считать, сколько нужно отложить, и предупредит заранее.</div>
+    <div class="field"><label>Название</label><input class="inp" id="rName" placeholder="Напр. Кредит Kaspi" value="${esc(cur.name||"")}"></div>
+    <div class="field"><label>Сумма, ₸</label><input class="inp num" id="rAmt" type="text" inputmode="numeric" autocomplete="off" enterkeyhint="next" placeholder="5 000" value="${fmtInput(String(cur.amount||""))}"></div>
+    <div class="field"><label>Категория</label><select class="inp" id="rCat">${EXP_CATS.map(c=>`<option value="${c[0]}" ${cur.category===c[0]?"selected":""}>${c[1]} ${c[0]}</option>`).join("")}</select></div>
+    <div class="split2">
+      <div class="field"><label>Период</label><select class="inp" id="rPer">
+        <option value="month" ${cur.period==="month"?"selected":""}>Каждый месяц</option>
+        <option value="week" ${cur.period==="week"?"selected":""}>Каждую неделю</option>
+        <option value="year" ${cur.period==="year"?"selected":""}>Каждый год</option></select></div>
+      <div class="field"><label id="rDayLbl">Число месяца</label><input class="inp num" id="rDay" type="text" inputmode="numeric" autocomplete="off" placeholder="27" value="${cur.day||""}"></div>
+    </div>
+    <label class="chkrow"><input type="checkbox" id="rMust" ${billIsMust(cur)?"checked":""}><span>Обязательный — без него нельзя обойтись</span></label>
+    <label class="chkrow"><input type="checkbox" id="rAuto" ${cur.auto!==false?"checked":""}><span>Считать оплаченным автоматически, когда найдётся подходящая операция</span></label>
+    ${sug.length?`<div class="section-title" style="margin-top:14px">Нашёл в твоих операциях</div>
+    <div class="card" style="padding:2px 12px;margin-bottom:14px">${sug.map((s,i)=>`
+      <div class="row"><div class="av">${EMO[s.category]||"📄"}</div>
+        <div class="t"><div class="name">${esc(s.name)}</div>
+          <div class="meta">≈ ${money(s.amount)} · ${s.months} ${plural(s.months,"месяц","месяца","месяцев")} · обычно ${s.day}-го</div></div>
+        <button class="chip on" data-act="bill-add-sug" data-i="${i}">＋</button></div>`).join("")}</div>`:""}
     ${(S.recurring||[]).length?`<div class="section-title" style="margin-top:6px">Уже добавлены</div>
-    <div class="card" style="padding:6px 14px;margin-bottom:14px">${S.recurring.map(r=>`
-      <div class="row"><div class="av">${EMO[r.category]||"📄"}</div>
-      <div class="t"><div class="name">${esc(r.name)}</div><div class="meta">${money(r.amount)}</div></div>
+    <div class="card" style="padding:2px 12px;margin-bottom:14px">${S.recurring.map(r=>`
+      <div class="row"><div class="av">${r.emoji||EMO[r.category]||"📄"}</div>
+      <div class="t"><div class="name">${esc(r.name)}</div>
+        <div class="meta">${money(r.amount)} · ${billPerRu(r)}${billIsMust(r)?"":" · необязательный"}</div></div>
       <button class="icon-btn" data-act="rec-del" data-id="${r.id}" style="width:32px;height:32px">✕</button></div>`).join("")}</div>`:""}
-    <button class="btn" id="rSave">Добавить</button>
+    <button class="btn" id="rSave">${ed?"Сохранить":"Добавить"}</button>
     <button class="btn ghost" id="rClose" style="margin-top:10px">Закрыть</button>
   `);
+  const perSel=$("#rPer"), dayLbl=$("#rDayLbl"), dayInp=$("#rDay");
+  const syncDay=()=>{
+    const p=perSel.value;
+    dayLbl.textContent=p==="week"?"День недели (1 = Пн … 0 = Вс)":p==="year"?"Число месяца":"Число месяца";
+    dayInp.placeholder=p==="week"?"1":"27";
+  };
+  perSel.onchange=syncDay; syncDay();
   $("#rAmt").oninput=()=>$("#rAmt").value=fmtInput($("#rAmt").value);
-  $("#rDay").oninput=()=>$("#rDay").value=$("#rDay").value.replace(/\D/g,"").slice(0,2);
+  dayInp.oninput=()=>dayInp.value=dayInp.value.replace(/\D/g,"").slice(0,2);
   document.querySelectorAll('#sheet [data-act="rec-del"]').forEach(b=>b.onclick=()=>delRecurring(b.dataset.id));
+  document.querySelectorAll('#sheet [data-act="bill-add-sug"]').forEach(b=>b.onclick=()=>addBillFromSug(+b.dataset.i));
   $("#rSave").onclick=()=>{
     const name=$("#rName").value.trim(), amt=+$("#rAmt").value.replace(/\D/g,"")||0;
     if(!name||!amt){toast("Заполни название и сумму");return;}
-    S.recurring.push({id:uid(),name,amount:amt,category:$("#rCat").value,period:$("#rPer").value,day:+$("#rDay").value||1});
-    save();closeSheet();render();toast("Платёж добавлен");
+    const per=perSel.value;
+    const day=per==="week"?Math.min(6,Math.max(0,+dayInp.value||1)):Math.min(31,Math.max(1,+dayInp.value||1));
+    const data={name,amount:amt,category:$("#rCat").value,period:per,day,
+      must:$("#rMust").checked,auto:$("#rAuto").checked};
+    if(ed)Object.assign(ed,data);
+    else S.recurring.push(Object.assign({id:uid(),match:"",paid:{},skip:{},created:todayISO()},data));
+    save();closeSheet();render();toast(ed?"Сохранено":"Платёж добавлен");
   };
   $("#rClose").onclick=closeSheet;
 }
+function addBillFromSug(i){
+  const s=BILL_SUG[i]; if(!s)return;
+  S.recurring.push({id:uid(),name:s.name,amount:s.amount,category:s.category,
+    period:"month",day:s.day,must:s.must,auto:true,match:s.match,
+    paid:{},skip:{},created:todayISO()});
+  BILL_SUG.splice(i,1);
+  save();closeSheet();render();toast("Добавлен: "+s.name);
+}
 function delRecurring(id){markDeleted(id);S.recurring=(S.recurring||[]).filter(r=>r.id!==id);save();closeSheet();render();toast("Удалено");}
+/* ---------- предупреждения ----------
+   Порядок важности: просрочка → срок на носу → денег не хватает. */
+function billNotify(){
+  if(!(S.recurring||[]).length)return;
+  let bp=null; try{bp=billsPlan();}catch(e){return;}
+  if(bp.overdue.length){
+    const o=bp.overdue[0];
+    notifyOnce("recurring","🔴 Просрочен платёж: "+o.r.name,
+      money(o.amount)+" — срок был "+ruDateFull(o.due),"over");
+  }else{
+    for(const o of bp.ahead){
+      if(o.days===0){notifyOnce("recurring","📅 Сегодня платёж: "+o.r.name,money(o.amount),"d0");break;}
+      if(o.days===1){notifyOnce("recurring","📅 Завтра платёж: "+o.r.name,money(o.amount),"d1");break;}
+      if(o.days===3){notifyOnce("recurring","📅 Через 3 дня платёж: "+o.r.name,money(o.amount),"d3");break;}
+      if(o.days>3)break;
+    }
+  }
+  if(bp.deficit>0){
+    const due=bp.firstShort.due, t=todayISO();
+    notifyOnce("bills","🔒 Не хватает на обязательные платежи",
+      due<=t ? "Нужно найти "+money(bp.deficit)+" — срок «"+bp.firstShort.r.name+"» уже наступил."
+             : "Нужно ещё "+money(bp.deficit)+" к "+ruDateFull(due)+" — это "+money(bp.perDay)+" в день.",
+      "gap");
+  }
+}
+
+function billReserveMove(){
+  const bp=billsPlan();
+  const j=ensureBillsJar();
+  render();
+  jarMove(j.id,"in",Math.max(0,Math.min(bp.available,bp.need-bp.reserve)));
+}
 
 /* ---------- БЫСТРЫЙ РАСХОД ---------- */
 function quickAdd(cat){
@@ -3501,9 +3972,13 @@ function openNotify(){
       ${item("statement","📄","Напоминание о выписке","Раз в неделю загрузить выписку")}
       ${item("goal","🎯","Прогресс по целям","Когда цель близка или достигнута")}
       ${item("budget","💰","Бюджет","Когда лимит категории на исходе")}
-      ${item("recurring","📅","Регулярные платежи","За день до списания")}
+      ${item("recurring","📅","Сроки платежей","За 3 дня, за день и в день списания")}
+      ${item("bills","🔒","Не хватает на платежи","Когда денег не хватает закрыть обязательное")}
       ${item("challenge","🔥","Челленджи","Напоминание об очередном взносе")}
     </div>
+    <div class="section-title">Горизонт планирования</div>
+    <div class="help" style="margin-bottom:10px">На сколько дней вперёд считать обязательные платежи.</div>
+    <div class="chips" id="nHor">${[14,30,45,60].map(d=>`<button class="chip ${billHorizon()===d?"on":""}" data-nhor="${d}">${d} дн.</button>`).join("")}</div>
     <button class="btn gold" id="nPush" style="margin-top:14px">🔔 Push-уведомления на закрытое приложение</button>
     <div class="help" style="margin-top:14px">Без push уведомления показываются только когда приложение открыто. На iPhone они работают, только если приложение добавлено на экран «Домой» (iOS 16.4+). Когда приложение полностью закрыто, iOS не гарантирует доставку по расписанию — поэтому напоминания также показываются баннером при открытии.</div>
     <button class="btn" id="nSave" style="margin-top:14px">Сохранить</button>
@@ -3511,18 +3986,22 @@ function openNotify(){
   `);
   if($("#nPush"))$("#nPush").onclick=openPushSetup;
   if($("#nAsk"))$("#nAsk").onclick=async()=>{try{await Notification.requestPermission();closeSheet();openNotify();}catch(e){}};
+  document.querySelectorAll("[data-nhor]").forEach(b=>b.onclick=()=>{
+    S.settings.billHorizon=+b.dataset.nhor;save();
+    document.querySelectorAll("[data-nhor]").forEach(x=>x.classList.toggle("on",x===b));
+  });
   $("#nSave").onclick=()=>{
     const o={};document.querySelectorAll("[data-nk]").forEach(c=>o[c.dataset.nk]=c.checked);
-    S.settings.notify=o;save();closeSheet();toast("Настройки сохранены");
+    S.settings.notify=o;save();closeSheet();render();toast("Настройки сохранены");
   };
   $("#nClose").onclick=closeSheet;
 }
 /* показываем не чаще одного уведомления в день на тип */
-function notifyOnce(kind,title,body){
+function notifyOnce(kind,title,body,tag){
   const n=S.settings.notify||{};
   if(n[kind]===false)return false;
   if(!("Notification" in window)||Notification.permission!=="granted")return false;
-  const key="ntf_"+kind+"_"+todayISO();
+  const key="ntf_"+kind+"_"+(tag||"")+"_"+todayISO();
   if(localStorage.getItem(key))return false;
   try{new Notification(title,{body});localStorage.setItem(key,"1");return true;}catch(e){return false;}
 }
@@ -3536,11 +4015,8 @@ function runNotifications(){
     const last=S.settings.lastStatement;
     if(last&&daysBetween(last,todayISO())>=7)
       notifyOnce("statement","📄 Пора обновить аналитику","Загрузи свежую банковскую выписку.");
-    /* регулярные платежи завтра */
-    for(const r of (S.recurring||[])){
-      const d=daysBetween(todayISO(),nextDue(r));
-      if(d===1)notifyOnce("recurring","📅 Завтра платёж: "+r.name,money(r.amount));
-    }
+    /* обязательные платежи: просрочка → срок → нехватка денег */
+    billNotify();
     /* бюджет на исходе */
     const b=S.budgets||{},cur=monthTx(curMonth());
     for(const c in b){
@@ -3641,10 +4117,14 @@ function syncSummary(){
     try{
       const w=weekStats(0), ms=moneyState();
       const last=S.settings.lastStatement;
+      let bp=null; try{bp=billsPlan();}catch(e){}
       idbPut("summary",{
         weekInc:w.inc, weekExp:w.exp, weekSaved:w.saved,
         total:ms.total, saved:ms.saved, available:ms.available,
         statementDays:last?daysBetween(last,todayISO()):null,
+        billsNeed:bp?bp.need:null, billsDeficit:bp?bp.deficit:null,
+        billsPerDay:bp?bp.perDay:null, billsOverdue:bp?bp.overdue.length:0,
+        billsNext:(bp&&bp.ahead[0])?{name:bp.ahead[0].r.name,amount:bp.ahead[0].amount,days:bp.ahead[0].days}:null,
         updated:Date.now()
       });
     }catch(e){}
@@ -3778,6 +4258,7 @@ const DEEP_LINKS={
   cash:       {t:"Наличные",          run:()=>openCashSheet()},
   jar:        {t:"Пополнить копилку", run:()=>jarMove(ensureJar().id,"in")},
   goal:       {t:"Создать цель",      run:()=>openJar()},
+  bills:      {t:"Обязательные платежи",run:()=>{TAB="home";render();openRecurring();}},
   import:     {t:"Загрузить выписку", run:()=>{TAB="ops";render();openImport();}},
   report:     {t:"Отчёт за неделю",   run:()=>openWeeklyReport()},
   score:      {t:"Финансовый рейтинг",run:()=>openScore()},
@@ -4581,13 +5062,18 @@ function safeToSpend(){
   const ms=moneyState(), plan=S.settings.plan||{};
   const mtx=monthTx(curMonth());
   const spentReal=spendBreakdown(mtx).real;
-  /* обязательства этого месяца, которые ещё не оплачены */
-  const rec=(S.recurring||[]).reduce((a,r)=>a+(r.period==="month"?r.amount:0),0);
-  const base=ms.available-Math.max(0,rec);
+  /* Обязательства, которые РЕАЛЬНО ещё не оплачены (просрочка + горизонт).
+     Уже оплаченные платежи не вычитаем — иначе деньги считались бы дважды.
+     То, что лежит в копилке «На обязательные платежи», из свободных денег
+     уже вычтено (это отложенное), поэтому вычитаем только непокрытый остаток. */
+  const bp=billsPlan();
+  const rec=bp.need;
+  const base=Math.max(0,ms.available-Math.max(0,rec-bp.reserve));
   const budgetLeft=plan.free?Math.max(0,plan.free-spentReal):base;
   const pool=Math.max(0,Math.min(base,budgetLeft||base));
   const days=daysLeftInMonth();
-  return{pool,days,perDay:Math.floor(pool/days),spentReal,rec,budgetFree:plan.free||0};
+  return{pool,days,perDay:Math.floor(pool/days),spentReal,rec,
+    billsNeed:bp.need,billsReserve:bp.reserve,billsDeficit:bp.deficit,budgetFree:plan.free||0};
 }
 function openPlan(){
   const p=S.settings.plan||{}, ms=moneyState();
@@ -4645,12 +5131,12 @@ function allocationAdvice(){
   const cushion=S.jars.find(j=>j.type==="cushion");
   const cushionGap=cushion?Math.max(0,cushion.target-jarCurrent(cushion)):0;
   const goals=S.jars.filter(j=>j.target&&j.type!=="cushion"&&jarCurrent(j)<j.target);
-  const rec=(S.recurring||[]).reduce((a,r)=>a+(r.period==="month"?r.amount:0),0);
+  const rec=Math.max(0,billsPlan().deficit);
   const parts=[];
   let left=free;
   const take=(share,cap)=>{const v=Math.max(0,Math.min(Math.round(free*share),cap===undefined?Infinity:cap,left));left-=v;return v;};
-  const oblig=take(0.15,rec);
-  if(oblig)parts.push({em:"💳",name:"Обязательные платежи",amount:oblig,why:"регулярные платежи в этом месяце"});
+  const oblig=Math.min(rec,left); left-=oblig;   /* сначала закрываем обязательное */
+  if(oblig)parts.push({em:"🔒",name:"Обязательные платежи",amount:oblig,why:"их пока нечем закрыть"});
   const res=take(0.2,cushionGap||undefined);
   if(res)parts.push({em:"🛡",name:cushion?"Финансовая подушка":"Резерв",amount:res,why:cushion?"до цели подушки":"запас на непредвиденное"});
   if(goals.length){

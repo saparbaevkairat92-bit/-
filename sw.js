@@ -2,8 +2,10 @@
    Задачи:
    1) push-уведомления (текст собирается ЛОКАЛЬНО из IndexedDB — данные не уходят на сервер);
    2) офлайн-доступ (network-first, чтобы обновления применялись сразу). */
-const CACHE="kopilka-v1";
-const ASSETS=["./","./index.html","./manifest.webmanifest","./icon.svg","./apple-touch-icon.png"];
+const CACHE="kopilka-v3";   /* поднято: старая половинчатая иконка должна вычиститься */
+const ASSETS=["./","./index.html","./manifest.webmanifest","./icon.svg",
+  "./apple-touch-icon.png","./icon-192.png","./icon-512.png",
+  "./icon-maskable-192.png","./icon-maskable-512.png"];
 
 self.addEventListener("install",(e)=>{
   e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS).catch(()=>{})).then(()=>self.skipWaiting()));
@@ -59,6 +61,18 @@ async function buildMessage(kind){
     return{title:"📄 Пора обновить аналитику",
       body:d?`Последняя выписка была ${d} дн. назад. Загрузи свежую.`:"Загрузи свежую банковскую выписку."};
   }
+  if(kind==="bills"){
+    if(s&&s.billsOverdue)
+      return{title:"🔴 Просрочен обязательный платёж",
+        body:"Открой Копилку — есть платёж, срок которого уже прошёл."};
+    if(s&&s.billsDeficit>0)
+      return{title:"🔒 Не хватает на обязательные платежи",
+        body:"Нужно ещё "+fmt(s.billsDeficit)+" ₸ — это "+fmt(s.billsPerDay)+" ₸ в день."};
+    if(s&&s.billsNext)
+      return{title:"📅 Скоро платёж: "+s.billsNext.name,
+        body:fmt(s.billsNext.amount)+" ₸ "+(s.billsNext.days<=0?"сегодня":"через "+s.billsNext.days+" дн.")};
+    return{title:"🔒 Обязательные платежи",body:"Открой Копилку, чтобы проверить ближайшие списания."};
+  }
   if(!s)return{title:"📊 Финансовый отчёт за неделю",body:"Открой Копилку, чтобы посмотреть итоги недели."};
   const parts=[];
   if(s.weekInc!=null)parts.push("Доход "+fmt(s.weekInc)+" ₸");
@@ -74,7 +88,9 @@ self.addEventListener("push",(e)=>{
   e.waitUntil((async()=>{
     if(!kind){
       const s=await idbGet("summary");
-      kind=(s&&s.statementDays>=7)?"statement":"weekly";
+      /* важность: просроченный или нечем закрыть платёж → выписка → неделя */
+      kind=(s&&(s.billsOverdue||s.billsDeficit>0))?"bills"
+          :(s&&s.statementDays>=7)?"statement":"weekly";
     }
     const m=await buildMessage(kind);
     await self.registration.showNotification(m.title,{
@@ -86,7 +102,8 @@ self.addEventListener("push",(e)=>{
 self.addEventListener("notificationclick",(e)=>{
   e.notification.close();
   const kind=(e.notification.data&&e.notification.data.kind)||"weekly";
-  const url=new URL("./",self.location.href).href+(kind==="statement"?"#import":"#report");
+  const url=new URL("./",self.location.href).href+
+    (kind==="statement"?"#import":kind==="bills"?"#bills":"#report");
   e.waitUntil(self.clients.matchAll({type:"window",includeUncontrolled:true}).then(list=>{
     for(const c of list){ if(c.url.startsWith(new URL("./",self.location.href).href)&&"focus" in c){
       c.navigate&&c.navigate(url); return c.focus(); } }

@@ -17,10 +17,34 @@
       "purpose": "any"
     },
     {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
       "src": "./apple-touch-icon.png",
       "sizes": "180x180",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "./icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ],
   "shortcuts": [
@@ -30,8 +54,9 @@
       "url": "./#expense",
       "icons": [
         {
-          "src": "./apple-touch-icon.png",
-          "sizes": "180x180"
+          "src": "./icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
         }
       ]
     },
@@ -41,8 +66,9 @@
       "url": "./#income",
       "icons": [
         {
-          "src": "./apple-touch-icon.png",
-          "sizes": "180x180"
+          "src": "./icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
         }
       ]
     },
@@ -52,8 +78,9 @@
       "url": "./#transfer",
       "icons": [
         {
-          "src": "./apple-touch-icon.png",
-          "sizes": "180x180"
+          "src": "./icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
         }
       ]
     },
@@ -63,8 +90,9 @@
       "url": "./#jar",
       "icons": [
         {
-          "src": "./apple-touch-icon.png",
-          "sizes": "180x180"
+          "src": "./icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
         }
       ]
     }
