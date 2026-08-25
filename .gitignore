@@ -1,0 +1,5 @@
+# Секреты Cloudflare — никогда не коммитить
+push/.dev.vars
+push/.wrangler/
+push/node_modules/
+.wrangler/

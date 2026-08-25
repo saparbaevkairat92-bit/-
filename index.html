@@ -5,6 +5,10 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Копилка">
 <meta name="theme-color" content="#0e1311">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<script src="./push-config.js"></script>
 <title>Копилка</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -726,6 +730,7 @@ function render(){
   else if(TAB==="save")v.innerHTML=viewSave();
   else if(TAB==="stats")v.innerHTML=viewStats();
   bindView();
+  try{syncSummary();}catch(e){}
 }
 
 /* ---------------- HOME ---------------- */
@@ -3447,10 +3452,12 @@ function openNotify(){
       ${item("recurring","📅","Регулярные платежи","За день до списания")}
       ${item("challenge","🔥","Челленджи","Напоминание об очередном взносе")}
     </div>
-    <div class="help" style="margin-top:14px">На iPhone уведомления работают, только если приложение добавлено на экран «Домой» (iOS 16.4+). Когда приложение полностью закрыто, iOS не гарантирует доставку по расписанию — поэтому напоминания также показываются баннером при открытии.</div>
+    <button class="btn gold" id="nPush" style="margin-top:14px">🔔 Push-уведомления на закрытое приложение</button>
+    <div class="help" style="margin-top:14px">Без push уведомления показываются только когда приложение открыто. На iPhone они работают, только если приложение добавлено на экран «Домой» (iOS 16.4+). Когда приложение полностью закрыто, iOS не гарантирует доставку по расписанию — поэтому напоминания также показываются баннером при открытии.</div>
     <button class="btn" id="nSave" style="margin-top:14px">Сохранить</button>
     <button class="btn ghost" id="nClose" style="margin-top:10px">Закрыть</button>
   `);
+  if($("#nPush"))$("#nPush").onclick=openPushSetup;
   if($("#nAsk"))$("#nAsk").onclick=async()=>{try{await Notification.requestPermission();closeSheet();openNotify();}catch(e){}};
   $("#nSave").onclick=()=>{
     const o={};document.querySelectorAll("[data-nk]").forEach(c=>o[c.dataset.nk]=c.checked);
@@ -3508,6 +3515,197 @@ function pinFail(){
   return n;
 }
 function pinOk(){localStorage.removeItem("pin_fails");localStorage.removeItem("pin_lock");}
+</script>
+
+<script>
+"use strict";
+/* =====================================================================
+   PUSH-УВЕДОМЛЕНИЯ (Web Push + service worker)
+   Приватность: на сервер уходит только подписка браузера.
+   Финансовые данные НЕ передаются — текст уведомления собирает
+   service worker на телефоне из локальной базы (см. sw.js).
+   ===================================================================== */
+function pushCfg(){
+  const base=(window.PUSH_CONFIG||{});
+  let ov={};
+  try{ov=JSON.parse(localStorage.getItem("push_cfg")||"{}");}catch(e){}
+  return{serverUrl:(ov.serverUrl||base.serverUrl||"").replace(/\/+$/,""),
+         vapidPublicKey:ov.vapidPublicKey||base.vapidPublicKey||""};
+}
+function pushConfigured(){const c=pushCfg();return !!(c.serverUrl&&c.vapidPublicKey);}
+function pushSupported(){return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;}
+/* iOS присылает push только установленному на экран «Домой» приложению */
+function isStandalone(){
+  return window.matchMedia("(display-mode: standalone)").matches || navigator.standalone===true;
+}
+function isIOS(){return /iPad|iPhone|iPod/.test(navigator.userAgent)&&!window.MSStream;}
+function b64ToU8(b64){
+  const pad="=".repeat((4-b64.length%4)%4);
+  const s2=(b64+pad).replace(/-/g,"+").replace(/_/g,"/");
+  const raw=atob(s2); const out=new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i);
+  return out;
+}
+
+/* ---------- регистрация service worker ---------- */
+let SWREG=null;
+async function registerSW(){
+  if(!("serviceWorker" in navigator))return null;
+  try{
+    SWREG=await navigator.serviceWorker.register("./sw.js",{scope:"./"});
+    return SWREG;
+  }catch(e){return null;}
+}
+async function getReg(){
+  if(SWREG)return SWREG;
+  if(!("serviceWorker" in navigator))return null;
+  try{SWREG=await navigator.serviceWorker.ready;}catch(e){SWREG=null;}
+  return SWREG;
+}
+
+/* ---------- локальная сводка для уведомлений (в IndexedDB) ---------- */
+function idbPut(key,val){
+  return new Promise((res)=>{
+    try{
+      const req=indexedDB.open("kopilka",1);
+      req.onupgradeneeded=()=>{try{req.result.createObjectStore("meta");}catch(e){}};
+      req.onerror=()=>res(false);
+      req.onsuccess=()=>{
+        try{
+          const db=req.result;
+          if(!db.objectStoreNames.contains("meta"))return res(false);
+          const tx=db.transaction("meta","readwrite");
+          tx.objectStore("meta").put(val,key);
+          tx.oncomplete=()=>res(true); tx.onerror=()=>res(false);
+        }catch(e){res(false);}
+      };
+    }catch(e){res(false);}
+  });
+}
+let _syncT=null;
+function syncSummary(){
+  clearTimeout(_syncT);
+  _syncT=setTimeout(()=>{
+    try{
+      const w=weekStats(0), ms=moneyState();
+      const last=S.settings.lastStatement;
+      idbPut("summary",{
+        weekInc:w.inc, weekExp:w.exp, weekSaved:w.saved,
+        total:ms.total, saved:ms.saved, available:ms.available,
+        statementDays:last?daysBetween(last,todayISO()):null,
+        updated:Date.now()
+      });
+    }catch(e){}
+  },800);
+}
+
+/* ---------- подписка / отписка ---------- */
+async function pushSubscribe(){
+  const cfg=pushCfg();
+  if(!pushSupported())throw new Error("браузер не поддерживает push");
+  if(!cfg.serverUrl||!cfg.vapidPublicKey)throw new Error("не настроен сервер уведомлений");
+  if(isIOS()&&!isStandalone())throw new Error("на iPhone сначала добавь приложение на экран «Домой»");
+  const perm=await Notification.requestPermission();
+  if(perm!=="granted")throw new Error("разрешение на уведомления не выдано");
+  const reg=await registerSW()||await getReg();
+  if(!reg)throw new Error("не удалось запустить service worker");
+  await navigator.serviceWorker.ready;
+  let sub=await reg.pushManager.getSubscription();
+  if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,
+    applicationServerKey:b64ToU8(cfg.vapidPublicKey)});
+  const res=await fetch(cfg.serverUrl+"/subscribe",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({subscription:sub.toJSON(),tz:Intl.DateTimeFormat().resolvedOptions().timeZone||""})});
+  if(!res.ok)throw new Error("сервер не принял подписку ("+res.status+")");
+  S.settings.pushOn=true; save(); syncSummary();
+  return true;
+}
+async function pushUnsubscribe(){
+  const cfg=pushCfg();
+  const reg=await getReg();
+  const sub=reg&&await reg.pushManager.getSubscription();
+  if(sub){
+    if(cfg.serverUrl)try{await fetch(cfg.serverUrl+"/unsubscribe",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({endpoint:sub.endpoint})});}catch(e){}
+    try{await sub.unsubscribe();}catch(e){}
+  }
+  S.settings.pushOn=false; save();
+  return true;
+}
+async function pushTest(){
+  const cfg=pushCfg();
+  const reg=await getReg();
+  const sub=reg&&await reg.pushManager.getSubscription();
+  if(!sub)throw new Error("сначала включи уведомления");
+  const res=await fetch(cfg.serverUrl+"/test",{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify({endpoint:sub.endpoint})});
+  const j=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(j.error||("сервер ответил "+res.status));
+  return true;
+}
+async function pushStatus(){
+  const cfg=pushCfg();
+  const out={supported:pushSupported(),configured:!!(cfg.serverUrl&&cfg.vapidPublicKey),
+    standalone:isStandalone(),ios:isIOS(),
+    perm:("Notification" in window)?Notification.permission:"unsupported",subscribed:false};
+  try{const reg=await getReg();const sub=reg&&await reg.pushManager.getSubscription();out.subscribed=!!sub;}catch(e){}
+  return out;
+}
+
+/* ---------- окно настройки push ---------- */
+async function openPushSetup(){
+  const st=await pushStatus(); const cfg=pushCfg();
+  const row=(ok,t,sub)=>`<div class="row"><div class="av">${ok===true?"✅":ok===false?"❌":"⚠️"}</div>
+    <div class="t"><div class="name">${t}</div><div class="meta">${sub}</div></div></div>`;
+  openSheet(`
+    <h2>🔔 Push-уведомления</h2>
+    <div class="help" style="margin-bottom:14px">Приходят, даже когда приложение закрыто. На сервер уходит только подписка браузера — <b>финансовые данные не передаются</b>, текст уведомления телефон собирает сам.</div>
+    <div class="card" style="padding:6px 14px;margin-bottom:14px">
+      ${row(st.supported,"Поддержка браузером",st.supported?"есть":"нет Push API")}
+      ${row(st.ios?st.standalone:true,"Установлено на экран «Домой»",
+        st.ios?(st.standalone?"да":"обязательно для iPhone — открой через иконку"):"не требуется")}
+      ${row(st.configured,"Сервер уведомлений",st.configured?cfg.serverUrl:"не настроен")}
+      ${row(st.perm==="granted","Разрешение",st.perm==="granted"?"выдано":st.perm==="denied"?"запрещено в настройках iPhone":"не запрошено")}
+      ${row(st.subscribed,"Подписка",st.subscribed?"активна":"нет")}
+    </div>
+    ${!st.configured?`
+    <div class="section-title" style="margin-top:0">Настройка сервера</div>
+    <div class="field"><label>Адрес сервера</label>
+      <input class="inp" id="puUrl" placeholder="https://kopilka-push.xxx.workers.dev" value="${esc(cfg.serverUrl)}" autocomplete="off"></div>
+    <div class="field"><label>Публичный ключ VAPID</label>
+      <input class="inp" id="puKey" placeholder="B..." value="${esc(cfg.vapidPublicKey)}" autocomplete="off"></div>
+    <button class="btn ghost" id="puSaveCfg" style="margin-bottom:12px">Сохранить настройки</button>
+    <div class="help" style="margin-bottom:14px">Как поднять свой сервер — в файле <b>push/README.md</b> в репозитории. Это бесплатно.</div>`:""}
+    ${st.configured?(st.subscribed
+      ? `<button class="btn ghost" id="puTest" style="margin-bottom:10px">📨 Отправить проверочное</button>
+         <button class="btn ghost" id="puOff" style="color:var(--exp)">Отключить push</button>`
+      : `<button class="btn" id="puOn">Включить push-уведомления</button>`):""}
+    <div id="puStatus" class="help" style="margin-top:12px;min-height:18px"></div>
+    <button class="btn ghost" id="puClose" style="margin-top:12px">Закрыть</button>
+  `);
+  const st2=$("#puStatus");
+  if($("#puSaveCfg"))$("#puSaveCfg").onclick=()=>{
+    localStorage.setItem("push_cfg",JSON.stringify({serverUrl:$("#puUrl").value.trim(),vapidPublicKey:$("#puKey").value.trim()}));
+    toast("Сохранено"); openPushSetup();
+  };
+  if($("#puOn"))$("#puOn").onclick=async()=>{
+    st2.textContent="Подключаю…";
+    try{await pushSubscribe();st2.innerHTML='<span class="g">Готово! Уведомления включены.</span>';
+      celebrate("🔔");setTimeout(openPushSetup,900);}
+    catch(e){st2.innerHTML='<span class="r">'+esc(e.message||String(e))+'</span>';}
+  };
+  if($("#puOff"))$("#puOff").onclick=async()=>{
+    st2.textContent="Отключаю…";
+    try{await pushUnsubscribe();st2.textContent="Отключено.";setTimeout(openPushSetup,700);}
+    catch(e){st2.innerHTML='<span class="r">'+esc(e.message||String(e))+'</span>';}
+  };
+  if($("#puTest"))$("#puTest").onclick=async()=>{
+    st2.textContent="Отправляю…";
+    try{await pushTest();st2.innerHTML='<span class="g">Отправлено — уведомление придёт через пару секунд.</span>';}
+    catch(e){st2.innerHTML='<span class="r">'+esc(e.message||String(e))+'</span>';}
+  };
+  $("#puClose").onclick=closeSheet;
+}
 </script>
 
 <script>
@@ -3989,6 +4187,8 @@ try{
   checkAchievements(true);
   checkReminders();
   runNotifications();
+  registerSW();
+  syncSummary();
   setInterval(checkReminders,60000);
   setInterval(runNotifications,15*60000);
 }catch(e){

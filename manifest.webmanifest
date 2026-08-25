@@ -1,0 +1,16 @@
+{
+  "name": "Копилка — личный финансовый центр",
+  "short_name": "Копилка",
+  "description": "Офлайн-кошелёк: доходы и расходы, копилки, цели, аналитика и импорт выписок.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0e1311",
+  "theme_color": "#0e1311",
+  "lang": "ru",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "./apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
