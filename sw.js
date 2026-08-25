@@ -2,8 +2,10 @@
    Задачи:
    1) push-уведомления (текст собирается ЛОКАЛЬНО из IndexedDB — данные не уходят на сервер);
    2) офлайн-доступ (network-first, чтобы обновления применялись сразу). */
-const CACHE="kopilka-v1";
-const ASSETS=["./","./index.html","./manifest.webmanifest","./icon.svg","./apple-touch-icon.png"];
+const CACHE="kopilka-v3";   /* поднято: старая половинчатая иконка должна вычиститься */
+const ASSETS=["./","./index.html","./manifest.webmanifest","./icon.svg",
+  "./apple-touch-icon.png","./icon-192.png","./icon-512.png",
+  "./icon-maskable-192.png","./icon-maskable-512.png"];
 
 self.addEventListener("install",(e)=>{
   e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS).catch(()=>{})).then(()=>self.skipWaiting()));

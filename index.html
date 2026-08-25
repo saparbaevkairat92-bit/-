@@ -6,8 +6,10 @@
 <meta name="apple-mobile-web-app-title" content="Копилка">
 <meta name="theme-color" content="#0e1311">
 <link rel="manifest" href="./manifest.webmanifest">
-<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png">
 <link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="./icon-512.png">
 <script src="./push-config.js"></script>
 <title>Копилка</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -460,6 +462,11 @@ function migrate(s){
   if(!st.notify)st.notify={weekly:true,statement:true,goal:true,budget:true,recurring:true,challenge:true};
   s.rules=s.rules||{}; s.rules.merchant=s.rules.merchant||{};
   s.rules.counterparty=s.rules.counterparty||{}; s.rules.category=s.rules.category||{};
+  for(const l of (Array.isArray(s.loans)?s.loans:[])){
+    if(!isFinite(+l.amount))l.amount=0;
+    if(!isFinite(+l.interest))l.interest=+l.rate||0;   /* старое имя поля — не теряем процент */
+    l.amount=+l.amount; l.interest=+l.interest;
+  }
   for(const k of ["transactions","jars","challenges","deposits","loans","recurring","statements","reports"])
     if(!Array.isArray(s[k]))s[k]=[];
   if(!s.budgets||typeof s.budgets!=="object")s.budgets={};
@@ -556,7 +563,12 @@ function migrate(s){
 function piggyDeposited(){return savedTotal();}
 function outstandingLoans(){return (S.loans||[]).filter(l=>!l.returned).reduce((a,l)=>a+l.amount,0);}
 function piggyAvailable(){return savedTotal()-outstandingLoans();}
-function loanDue(l){return Math.round(l.amount*(1+l.interest/100));}
+function loanDue(l){
+  const a=+(l&&l.amount)||0;
+  let i=+(l&&l.interest);
+  if(!isFinite(i)||i<0)i=0;          /* старые или повреждённые записи не должны давать NaN */
+  return Math.round(a*(1+i/100));
+}
 function isOverdue(l){return !l.returned && daysBetween(todayISO(),l.due)<0;}
 
 let S=load();
