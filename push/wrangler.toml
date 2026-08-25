@@ -1,4 +1,4 @@
-name = "kopilka-push"
+name = "kopilka-server"
 main = "worker.js"
 compatibility_date = "2024-11-01"
 
@@ -14,7 +14,7 @@ VAPID_PUBLIC_KEY = ""
 VAPID_SUBJECT = "mailto:kajratk001@gmail.com"
 
 # Хранилище подписок. ID подставится командой:
-#   npx wrangler kv namespace create SUBS
+#   npx wrangler kv namespace create KV
 [[kv_namespaces]]
-binding = "SUBS"
+binding = "KV"
 id = ""
