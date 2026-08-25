@@ -3738,17 +3738,28 @@ const DEEP_LINKS={
 };
 let PENDING_LINK=null;
 
-function linkKey(){
-  let h=(location.hash||"").replace(/^#/,"").trim().toLowerCase();
+function normLink(v){
+  let h=(v||"").replace(/^[#?]/,"").trim().toLowerCase();
   if(!h)return "";
   h=h.replace(/^add-/,"");                 /* #add-expense == #expense */
   return DEEP_LINKS[h]?h:"";
 }
-/* Разбираем ссылку. Если стоит пин-код — выполним сразу после разблокировки. */
-function handleDeepLink(){
-  const k=linkKey();
+/* ссылка из хэша: #expense — одноразовая, стирается после срабатывания */
+function linkKey(){return normLink(location.hash);}
+/* ссылка из параметра: ?add=expense — постоянная, сохраняется в иконке
+   на экране «Домой», поэтому такая иконка всегда открывает нужный экран */
+function paramKey(){
+  try{const p=new URLSearchParams(location.search);
+    return normLink(p.get("add")||p.get("a")||"");}catch(e){return "";}
+}
+/* Разбираем ссылку. Если стоит пин-код — выполним сразу после разблокировки.
+   fromBoot=true только при первом запуске: параметр ?add= срабатывает один раз
+   за запуск, иначе экран открывался бы снова при каждом возврате из фона. */
+function handleDeepLink(fromBoot){
+  let k=linkKey();
+  if(k){try{history.replaceState(null,"",location.pathname+location.search);}catch(e){}}
+  else if(fromBoot===true)k=paramKey();      /* хэш пуст — смотрим параметр */
   if(!k)return false;
-  try{history.replaceState(null,"",location.pathname+location.search);}catch(e){}
   const locked=$("#lock")&&$("#lock").classList.contains("on");
   if(locked){PENDING_LINK=k;return true;}
   runDeepLink(k);
@@ -3766,9 +3777,9 @@ function runPendingLink(){
   const k=PENDING_LINK; PENDING_LINK=null;
   setTimeout(()=>runDeepLink(k),250);
 }
-window.addEventListener("hashchange",handleDeepLink);
+window.addEventListener("hashchange",()=>handleDeepLink(false));
 /* приложение вернули из фона по ссылке */
-document.addEventListener("visibilitychange",()=>{if(!document.hidden)handleDeepLink();});
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)handleDeepLink(false);});
 
 /* ---------- экран «Быстрые действия» ---------- */
 function openQuickActions(){
@@ -3777,8 +3788,8 @@ function openQuickActions(){
   const row=(k)=>`<div class="row" data-qa="${k}">
     <div class="av">${{expense:"💸",income:"💰",transfer:"🔄",cash:"💵",jar:"🐷",add:"➕",import:"📄",report:"📊"}[k]}</div>
     <div class="t"><div class="name">${DEEP_LINKS[k].t}</div>
-      <div class="meta" style="word-break:break-all">${esc(base)}#${k}</div></div>
-    <button class="btn ghost sm" data-copy="${esc(base)}#${k}">Копировать</button></div>`;
+      <div class="meta" style="word-break:break-all">${esc(base)}?add=${k}</div></div>
+    <button class="btn ghost sm" data-copy="${esc(base)}?add=${k}">Копировать</button></div>`;
   openSheet(`
     <h2>⚡ Быстрые действия</h2>
     <div class="help" style="margin-bottom:14px">Приложение умеет открываться сразу на нужном экране. Ссылку ниже можно повесить на «Касание задней панели» iPhone, Быструю команду или отдельную иконку.</div>
@@ -3812,7 +3823,7 @@ function openQuickActions(){
       ta.remove();
     }
   };
-  $("#qaMain").onclick=()=>copy(base+"#expense");
+  $("#qaMain").onclick=()=>copy(base+"?add=expense");
   document.querySelectorAll("[data-copy]").forEach(b=>b.onclick=(e)=>{e.stopPropagation();copy(b.dataset.copy);});
   document.querySelectorAll("[data-qa]").forEach(r=>r.onclick=()=>{closeSheet();runDeepLink(r.dataset.qa);});
   $("#qaClose").onclick=closeSheet;
@@ -4294,7 +4305,7 @@ function openDrill(kind){
 /* ---------- СТАРТ ПРИЛОЖЕНИЯ (после загрузки всех модулей) ---------- */
 try{
   render();
-  if(!handleDeepLink())welcome();   /* по быстрой ссылке приветствие не мешает */
+  if(!handleDeepLink(true))welcome();   /* по быстрой ссылке приветствие не мешает */
   checkAchievements(true);
   checkReminders();
   runNotifications();
