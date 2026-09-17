@@ -3,5 +3,10 @@
     "url": "https://example.com/webhook",
     "events": ["payment.success", "payment.failed", "payment.expired", "payment.lost"],
     "secret": "your-webhook-secret"
+  },
+  {
+    "url": "https://your-nexus-wms-host/webhooks/payments/kaspi_bridge",
+    "events": ["payment.success", "payment.failed", "payment.expired", "payment.lost"],
+    "secret": "same-as-KASPI_BRIDGE_WEBHOOK_SECRET-in-wms"
   }
 ]
