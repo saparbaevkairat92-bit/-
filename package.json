@@ -27,7 +27,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/",
+    "test": "node --test",
     "lint": "eslint .",
     "format": "prettier --write .",
     "regen:keypair": "node scripts/regen-keypair.js",
