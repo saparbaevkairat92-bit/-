@@ -17,6 +17,16 @@ const router = Router();
 // In-flight auth sessions keyed by processId (temporary, cleared after finish)
 const authSessions = new Map();
 
+// Abandoned SMS flows are discarded so the map cannot grow without bound
+const AUTH_SESSION_TTL_MS = 15 * 60 * 1000;
+
+const dropExpiredAuthSessions = () => {
+  const now = Date.now();
+  for (const [id, session] of authSessions) {
+    if (now - session.startedAt > AUTH_SESSION_TTL_MS) authSessions.delete(id);
+  }
+};
+
 // ═══════════════════════════════════════════════════
 //  Step 1 — Init entrance (get processId)
 // ═══════════════════════════════════════════════════
@@ -59,6 +69,8 @@ router.post('/init', async (req, res) => {
     const body = await resp.json();
     if (body.meta?.pId) {
       session.processId = body.meta.pId;
+      session.startedAt = Date.now();
+      dropExpiredAuthSessions();
       authSessions.set(session.processId, session);
     }
 
@@ -101,7 +113,8 @@ router.post('/send-phone', async (req, res) => {
     if (ut) session.userToken = ut;
 
     const body = await resp.json();
-    const smsSent = body.view?.code === 'EnterOtp';
+    // Kaspi names the OTP screen differently between releases (EnterOtp, ViewEnterOtp, KPEnterOtp…)
+    const smsSent = /otp/i.test(body.view?.code || '');
 
     res.json({ success: smsSent, processId: session.processId, desc: body.data?.desc, view: body.view?.code, body });
   } catch (err) {
@@ -229,7 +242,6 @@ async function doFinish(session) {
 
     // Fetch org context
     const orgUrl = `${KASPI_MTOKEN_URL}/v08/organizations/org-context-otp`;
-    const piValue = session.profileId != null ? String(session.profileId) : '';
     const orgHeaders = {
       'Content-Type': 'application/json',
       Accept: '*/*',

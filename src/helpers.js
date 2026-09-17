@@ -45,10 +45,24 @@ export const extractUserToken = (resp) => {
 
 // ─── Logged fetch wrapper ───
 
+const SENSITIVE_HEADERS = new Set([
+  'cookie',
+  'x-kb-tokensn',
+  'x-kb-tokensnmac',
+  'x-sign',
+  'x-vtoken-secret',
+  'authorization',
+]);
+
+const redactHeaders = (headers) =>
+  Object.fromEntries(
+    Object.entries(headers).map(([k, v]) => [k, SENSITIVE_HEADERS.has(k.toLowerCase()) ? '[redacted]' : v]),
+  );
+
 export const loggedFetch = async (url, options = {}) => {
   const method = (options.method || 'GET').toUpperCase();
   console.log(`\n>>> ${method} ${url}`);
-  if (options.headers) console.log('>>> Headers:', JSON.stringify(options.headers, null, 2));
+  if (options.headers) console.log('>>> Headers:', JSON.stringify(redactHeaders(options.headers), null, 2));
   if (options.body) {
     try {
       console.log('>>> Body:', JSON.parse(options.body));

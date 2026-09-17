@@ -1,8 +1,8 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import {fileURLToPath} from 'url';
-import {ecKeyPair} from './config.js';
+import { fileURLToPath } from 'url';
+import { ecKeyPair } from './config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ECDH_FILE = path.join(__dirname, '..', 'ecdh-keypair.json');
@@ -13,12 +13,19 @@ const vtokenSuite = 'OCRA-1:HOTP-SHA256-6:QH64-T1M';
 
 // ─── AES-256-GCM encryption for vtokenSecret ───
 
+const KEY_HINT = 'Generate one with: echo "TOKEN_SECRET_KEY=$(openssl rand -hex 32)" > .env';
+
 if (!process.env.TOKEN_SECRET_KEY) {
   console.error('FATAL: TOKEN_SECRET_KEY environment variable is not set.');
-  console.error('Generate one with: echo "TOKEN_SECRET_KEY=$(openssl rand -hex 32)" > .env');
+  console.error(KEY_HINT);
   process.exit(1);
 }
-const ENCRYPTION_KEY = Buffer.from(process.env.TOKEN_SECRET_KEY, 'hex');
+if (!/^[0-9a-fA-F]{64}$/.test(process.env.TOKEN_SECRET_KEY.trim())) {
+  console.error('FATAL: TOKEN_SECRET_KEY must be exactly 64 hex characters (32 bytes).');
+  console.error(KEY_HINT);
+  process.exit(1);
+}
+const ENCRYPTION_KEY = Buffer.from(process.env.TOKEN_SECRET_KEY.trim(), 'hex');
 
 export const encryptSecret = (secretBuffer) => {
   const iv = crypto.randomBytes(12);
@@ -41,14 +48,14 @@ export const decryptSecret = (tokenB64) => {
 let lastEcdhKeyPair = null;
 
 export const generateECDH = () => {
-  lastEcdhKeyPair = crypto.generateKeyPairSync('ec', {namedCurve: 'prime256v1'});
+  lastEcdhKeyPair = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   // Persist ECDH private key so refresh (SignInLite) can reuse it
   const saved = {
-    privateKey: lastEcdhKeyPair.privateKey.export({type: 'pkcs8', format: 'der'}).toString('base64'),
-    publicKey: lastEcdhKeyPair.publicKey.export({type: 'spki', format: 'der'}).toString('base64'),
+    privateKey: lastEcdhKeyPair.privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64'),
+    publicKey: lastEcdhKeyPair.publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
   };
   fs.writeFileSync(ECDH_FILE, JSON.stringify(saved, null, 2));
-  const spki = lastEcdhKeyPair.publicKey.export({type: 'spki', format: 'der'});
+  const spki = lastEcdhKeyPair.publicKey.export({ type: 'spki', format: 'der' });
   return spki.toString('base64');
 };
 
@@ -81,7 +88,7 @@ export const completeECDHWithSaved = (serverX509B64) => {
     format: 'der',
     type: 'spki',
   });
-  const secret = crypto.diffieHellman({privateKey, publicKey: serverPubKey});
+  const secret = crypto.diffieHellman({ privateKey, publicKey: serverPubKey });
   console.log('ECDH (saved key) shared secret derived, length:', secret.length);
   return secret;
 };

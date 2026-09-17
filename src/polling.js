@@ -33,7 +33,12 @@ const loadTracked = () => {
     const raw = fs.readFileSync(TRACKED_FILE, 'utf8');
     const data = JSON.parse(raw);
     for (const [id, entry] of Object.entries(data)) {
-      trackedPayments.set(id, entry);
+      trackedPayments.set(id, {
+        ...entry,
+        meta: entry.meta || {},
+        retryCount: entry.retryCount || 0,
+        createdAt: entry.createdAt || Date.now(),
+      });
     }
     if (trackedPayments.size > 0) {
       logger.info('POLLING', `Restored ${trackedPayments.size} tracked payments from file`);
@@ -100,8 +105,11 @@ const INVOICE_FINAL_STATUSES = {
   Expired: 'payment.expired',
 };
 
-const QR_INTERMEDIATE = new Set(['QrTokenCreated', 'Wait']);
+const QR_INTERMEDIATE = new Set(['QrTokenCreated', 'Wait', 'QrTokenScanned', 'PaymentConfirmation']);
 const INVOICE_INTERMEDIATE = new Set(['RemotePaymentCreated']);
+
+// Payments are dropped after this age even if Kaspi never returns a final status
+const MAX_TRACKING_MS = 24 * 60 * 60 * 1000;
 
 // ─── Track a payment ───
 
@@ -247,14 +255,15 @@ const processRetries = async () => {
 
 // ─── Resolve event from status ───
 
-const resolveEvent = (type, status) => {
-  if (type === 'qr') {
-    if (QR_INTERMEDIATE.has(status)) return null;
-    return QR_FINAL_STATUSES[status] || 'payment.failed';
-  } else {
-    if (INVOICE_INTERMEDIATE.has(status)) return null;
-    return INVOICE_FINAL_STATUSES[status] || 'payment.failed';
-  }
+export const resolveEvent = (type, status) => {
+  const intermediate = type === 'qr' ? QR_INTERMEDIATE : INVOICE_INTERMEDIATE;
+  const final = type === 'qr' ? QR_FINAL_STATUSES : INVOICE_FINAL_STATUSES;
+
+  if (intermediate.has(status)) return null;
+  if (final[status]) return final[status];
+
+  logger.warn('POLLING', `Unknown ${type} status "${status}" — keeping payment tracked`);
+  return null;
 };
 
 // ─── Poll cycle ───
@@ -263,6 +272,20 @@ const pollOnce = async () => {
   let changed = false;
 
   for (const [id, entry] of trackedPayments) {
+    if (Date.now() - entry.createdAt > MAX_TRACKING_MS) {
+      logger.warn('POLLING', `Payment ${id} tracked for over 24h without a final status — dropping`);
+      sendWebhooks(
+        'payment.lost',
+        buildPayload('payment.lost', entry, {
+          Status: entry.status,
+          StatusDesc: 'Окончательный статус платежа не получен в течение 24 часов',
+        }),
+      );
+      trackedPayments.delete(id);
+      changed = true;
+      continue;
+    }
+
     // TTL check via expireDate
     if (entry.meta.expireDate) {
       const expiry = new Date(entry.meta.expireDate).getTime();

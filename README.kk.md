@@ -51,7 +51,7 @@ Kaspi Pay API арқылы POS-жүйелер үшін төлемдерді ав
 
 ```bash
 # 1. Репозиторийді клондау
-git clone https://github.com/tapter-dev/kaspi-pos-automation.git
+git clone https://github.com/saparbaevkairat92-bit/-.git kaspi-pos-automation
 cd kaspi-pos-automation
 
 # 2. Тәуелділіктерді орнату
@@ -76,18 +76,18 @@ npm start
 | ------------------- | ---------------------------------------- | -------------------------- | -------- |
 | `TOKEN_SECRET_KEY`  | AES-256-GCM үшін 64 символды hex-жол    | —                          | Иә       |
 | `PORT`              | Сервер порты                             | `3000`                     | Жоқ      |
-| `APP_VERSION`       | Kaspi Pay қосымша нұсқасы                | `4.110.1`                  | Жоқ      |
-| `APP_BUILD`         | Құрастыру нөмірі                         | `1099`                     | Жоқ      |
+| `APP_VERSION`       | Kaspi Pay қосымша нұсқасы                | `4.112.1`                  | Жоқ      |
+| `APP_BUILD`         | Құрастыру нөмірі                         | `1107`                     | Жоқ      |
 | `APP_PLATFORM`      | Құрылғы платформасы                      | `iOS`                      | Жоқ      |
-| `APP_PLATFORM_VER`  | ОЖ нұсқасы                               | `18.5`                     | Жоқ      |
+| `APP_PLATFORM_VER`  | ОЖ нұсқасы                               | `18.4`                     | Жоқ      |
 | `APP_LOCALE`        | Тіл                                      | `ru-RU`                    | Жоқ      |
-| `APP_MODEL`         | Құрылғы моделі                           | `iPhone17,3`               | Жоқ      |
+| `APP_MODEL`         | Құрылғы моделі                           | `iPhone16,2`               | Жоқ      |
 | `APP_BRAND`         | Құрылғы бренді                           | `Apple`                    | Жоқ      |
 | `APP_DEVICE_NAME`   | Құрылғы атауы                            | `iPhone`                   | Жоқ      |
-| `APP_SCREEN_W`      | Экран ені                                | `393.0`                    | Жоқ      |
-| `APP_SCREEN_H`      | Экран биіктігі                           | `852.0`                    | Жоқ      |
-| `APP_CFNETWORK`     | CFNetwork нұсқасы                        | `CFNetwork/3826.500.131`   | Жоқ      |
-| `APP_DARWIN`        | Darwin нұсқасы                           | `Darwin/24.5.0`            | Жоқ      |
+| `APP_SCREEN_W`      | Экран ені                                | `430.0`                    | Жоқ      |
+| `APP_SCREEN_H`      | Экран биіктігі                           | `932.0`                    | Жоқ      |
+| `APP_CFNETWORK`     | CFNetwork нұсқасы                        | `CFNetwork/3826.400.120`   | Жоқ      |
+| `APP_DARWIN`        | Darwin нұсқасы                           | `Darwin/24.4.0`            | Жоқ      |
 
 > ⚠️ `APP_*` параметрлері нақты Kaspi Pay клиентіне сәйкес келеді. Kaspi API бұл мәндерді тексереді және белгісіз параметрлері бар сұрауларды қабылдамауы мүмкін.
 

@@ -92,7 +92,6 @@ const tryRestoreSession = async () => {
   return false;
 };
 
-
 const formatPhone = (digits) => {
   // Format up to 10 digits as "XXX XXX XX XX"
   const d = digits.slice(0, 10);
@@ -124,6 +123,14 @@ const setAuthStep = (n) => {
     $(`dot${i}`).className = `step-dot${i < n ? ' done' : i === n ? ' active' : ''}`;
   }
 };
+
+const errorText = (body, fallback) =>
+  body?.error?.desc ||
+  body?.data?.desc ||
+  body?.errorMessage ||
+  body?.Message ||
+  (typeof body?.error === 'string' ? body.error : null) ||
+  fallback;
 
 const showAuthMsg = (msg, type) => {
   const el = $('authMsg');
@@ -158,7 +165,7 @@ const sendPhone = async () => {
   try {
     const init = await apiPost('/api/auth/init');
     if (!init.success) {
-      showAuthMsg(`Ошибка инициализации: ${JSON.stringify(init.body)}`, 'err');
+      showAuthMsg(errorText(init.body, 'Не удалось связаться с Kaspi. Попробуйте ещё раз.'), 'err');
       return;
     }
 
@@ -169,7 +176,7 @@ const sendPhone = async () => {
       $('otpDesc').textContent = resp.desc || `SMS отправлен на +7${phone}`;
       setAuthStep(2);
     } else {
-      showAuthMsg(`Ошибка: ${resp.body?.data?.desc || JSON.stringify(resp.body)}`, 'err');
+      showAuthMsg(errorText(resp.body, 'Не удалось отправить SMS. Проверьте номер.'), 'err');
     }
   } catch (e) {
     showAuthMsg(`Ошибка сети: ${e.message}`, 'err');
@@ -195,7 +202,7 @@ const verifyOtp = async () => {
       authProcessId = null;
       showMainScreen(resp);
     } else {
-      showAuthMsg(`Неверный код или ошибка: ${resp.body?.data?.desc || JSON.stringify(resp.body)}`, 'err');
+      showAuthMsg(errorText(resp.body, 'Неверный код. Попробуйте ещё раз.'), 'err');
     }
   } catch (e) {
     showAuthMsg(`Ошибка: ${e.message}`, 'err');
@@ -229,7 +236,6 @@ const logout = async () => {
   showAuthMsg('', '');
 };
 
-
 const switchTab = (tab) => {
   $('invoiceTab').classList.toggle('hidden', tab !== 'invoice');
   $('qrTab').classList.toggle('hidden', tab !== 'qr');
@@ -248,9 +254,10 @@ const switchTab = (tab) => {
 const statusBadge = (status) => {
   const map = {
     RemotePaymentCreated: ['Ожидает оплаты', 'pending'],
-    RemotePaymentPaid: ['Оплачен', 'paid'],
+    Processed: ['Оплачен', 'paid'],
     RemotePaymentCanceled: ['Отменён', 'canceled'],
-    RemotePaymentExpired: ['Истёк', 'expired'],
+    RemotePaymentRejected: ['Отклонён', 'canceled'],
+    Expired: ['Истёк', 'expired'],
   };
   const [label, cls] = map[status] || [status, 'pending'];
   return `<span class="badge badge-${cls}">${label}</span>`;
@@ -327,7 +334,7 @@ const createInvoice = async () => {
       $('clientInfo').classList.add('hidden');
       startInvoicePolling();
     } else {
-      alert(`Ошибка: ${resp.Message || JSON.stringify(resp)}`);
+      alert(errorText(resp, 'Не удалось создать счёт. Попробуйте ещё раз.'));
     }
   } catch (e) {
     alert(`Ошибка: ${e.message}`);
@@ -349,27 +356,24 @@ const cancelInvoice = async () => {
 
 // ─── QR Code ───
 
-const FINAL_QR_STATUSES = [
-  'Paid',
-  'CancelledByUser',
-  'NotConfirmedByUser',
-  'QrTokenDiscarded',
-  'ProcessingFailed',
-  'InsufficientFunds',
-  'Error',
-];
+const QR_PENDING_STATUSES = ['QrTokenCreated', 'Wait', 'QrTokenScanned', 'PaymentConfirmation'];
 
 const qrStatusBadge = (status) => {
   const map = {
     QrTokenCreated: ['Ожидание сканирования', 'info'],
+    Wait: ['Ожидание оплаты', 'info'],
     QrTokenScanned: ['Отсканирован', 'info'],
     PaymentConfirmation: ['Подтверждение оплаты...', 'warn'],
-    Paid: ['Оплачено ✅', 'ok'],
+    Processed: ['Оплачено ✅', 'ok'],
     CancelledByUser: ['Отменено клиентом', 'err'],
     NotConfirmedByUser: ['Не подтверждено', 'err'],
+    CancelledByExternalSource: ['Отменено', 'err'],
+    Rejected: ['Отклонено', 'err'],
     QrTokenDiscarded: ['QR не отсканирован', 'err'],
+    Expired: ['Время оплаты истекло', 'err'],
     ProcessingFailed: ['Ошибка обработки', 'err'],
     InsufficientFunds: ['Недостаточно средств', 'err'],
+    InsufficientFundsError: ['Недостаточно средств', 'err'],
     Error: ['Ошибка', 'err'],
   };
   const [label, cls] = map[status] || [status, 'info'];
@@ -398,7 +402,7 @@ const pollQrStatus = async () => {
       el.className = `status-bar status-${cls}`;
       el.textContent = label;
     }
-    if (FINAL_QR_STATUSES.includes(status)) {
+    if (status && !QR_PENDING_STATUSES.includes(status)) {
       stopQrPolling();
     }
   } catch (e) {
@@ -457,7 +461,7 @@ const createQr = async () => {
       startQrCountdown(waitTimeout);
       qrPollingTimer = setInterval(pollQrStatus, pollInterval);
     } else {
-      alert(`Ошибка: ${resp.Message || JSON.stringify(resp)}`);
+      alert(errorText(resp, 'Не удалось создать QR. Попробуйте ещё раз.'));
     }
   } catch (e) {
     alert(`Ошибка: ${e.message}`);
