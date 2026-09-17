@@ -124,6 +124,14 @@ const setAuthStep = (n) => {
   }
 };
 
+const errorText = (body, fallback) =>
+  body?.error?.desc ||
+  body?.data?.desc ||
+  body?.errorMessage ||
+  body?.Message ||
+  (typeof body?.error === 'string' ? body.error : null) ||
+  fallback;
+
 const showAuthMsg = (msg, type) => {
   const el = $('authMsg');
   if (!msg) {
@@ -157,7 +165,7 @@ const sendPhone = async () => {
   try {
     const init = await apiPost('/api/auth/init');
     if (!init.success) {
-      showAuthMsg(`Ошибка инициализации: ${JSON.stringify(init.body)}`, 'err');
+      showAuthMsg(errorText(init.body, 'Не удалось связаться с Kaspi. Попробуйте ещё раз.'), 'err');
       return;
     }
 
@@ -168,7 +176,7 @@ const sendPhone = async () => {
       $('otpDesc').textContent = resp.desc || `SMS отправлен на +7${phone}`;
       setAuthStep(2);
     } else {
-      showAuthMsg(`Ошибка: ${resp.body?.data?.desc || JSON.stringify(resp.body)}`, 'err');
+      showAuthMsg(errorText(resp.body, 'Не удалось отправить SMS. Проверьте номер.'), 'err');
     }
   } catch (e) {
     showAuthMsg(`Ошибка сети: ${e.message}`, 'err');
@@ -194,7 +202,7 @@ const verifyOtp = async () => {
       authProcessId = null;
       showMainScreen(resp);
     } else {
-      showAuthMsg(`Неверный код или ошибка: ${resp.body?.data?.desc || JSON.stringify(resp.body)}`, 'err');
+      showAuthMsg(errorText(resp.body, 'Неверный код. Попробуйте ещё раз.'), 'err');
     }
   } catch (e) {
     showAuthMsg(`Ошибка: ${e.message}`, 'err');
@@ -326,7 +334,7 @@ const createInvoice = async () => {
       $('clientInfo').classList.add('hidden');
       startInvoicePolling();
     } else {
-      alert(`Ошибка: ${resp.Message || JSON.stringify(resp)}`);
+      alert(errorText(resp, 'Не удалось создать счёт. Попробуйте ещё раз.'));
     }
   } catch (e) {
     alert(`Ошибка: ${e.message}`);
@@ -453,7 +461,7 @@ const createQr = async () => {
       startQrCountdown(waitTimeout);
       qrPollingTimer = setInterval(pollQrStatus, pollInterval);
     } else {
-      alert(`Ошибка: ${resp.Message || JSON.stringify(resp)}`);
+      alert(errorText(resp, 'Не удалось создать QR. Попробуйте ещё раз.'));
     }
   } catch (e) {
     alert(`Ошибка: ${e.message}`);
