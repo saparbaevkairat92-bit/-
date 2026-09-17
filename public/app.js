@@ -92,7 +92,6 @@ const tryRestoreSession = async () => {
   return false;
 };
 
-
 const formatPhone = (digits) => {
   // Format up to 10 digits as "XXX XXX XX XX"
   const d = digits.slice(0, 10);
@@ -229,7 +228,6 @@ const logout = async () => {
   showAuthMsg('', '');
 };
 
-
 const switchTab = (tab) => {
   $('invoiceTab').classList.toggle('hidden', tab !== 'invoice');
   $('qrTab').classList.toggle('hidden', tab !== 'qr');
@@ -248,9 +246,10 @@ const switchTab = (tab) => {
 const statusBadge = (status) => {
   const map = {
     RemotePaymentCreated: ['Ожидает оплаты', 'pending'],
-    RemotePaymentPaid: ['Оплачен', 'paid'],
+    Processed: ['Оплачен', 'paid'],
     RemotePaymentCanceled: ['Отменён', 'canceled'],
-    RemotePaymentExpired: ['Истёк', 'expired'],
+    RemotePaymentRejected: ['Отклонён', 'canceled'],
+    Expired: ['Истёк', 'expired'],
   };
   const [label, cls] = map[status] || [status, 'pending'];
   return `<span class="badge badge-${cls}">${label}</span>`;
@@ -349,27 +348,24 @@ const cancelInvoice = async () => {
 
 // ─── QR Code ───
 
-const FINAL_QR_STATUSES = [
-  'Paid',
-  'CancelledByUser',
-  'NotConfirmedByUser',
-  'QrTokenDiscarded',
-  'ProcessingFailed',
-  'InsufficientFunds',
-  'Error',
-];
+const QR_PENDING_STATUSES = ['QrTokenCreated', 'Wait', 'QrTokenScanned', 'PaymentConfirmation'];
 
 const qrStatusBadge = (status) => {
   const map = {
     QrTokenCreated: ['Ожидание сканирования', 'info'],
+    Wait: ['Ожидание оплаты', 'info'],
     QrTokenScanned: ['Отсканирован', 'info'],
     PaymentConfirmation: ['Подтверждение оплаты...', 'warn'],
-    Paid: ['Оплачено ✅', 'ok'],
+    Processed: ['Оплачено ✅', 'ok'],
     CancelledByUser: ['Отменено клиентом', 'err'],
     NotConfirmedByUser: ['Не подтверждено', 'err'],
+    CancelledByExternalSource: ['Отменено', 'err'],
+    Rejected: ['Отклонено', 'err'],
     QrTokenDiscarded: ['QR не отсканирован', 'err'],
+    Expired: ['Время оплаты истекло', 'err'],
     ProcessingFailed: ['Ошибка обработки', 'err'],
     InsufficientFunds: ['Недостаточно средств', 'err'],
+    InsufficientFundsError: ['Недостаточно средств', 'err'],
     Error: ['Ошибка', 'err'],
   };
   const [label, cls] = map[status] || [status, 'info'];
@@ -398,7 +394,7 @@ const pollQrStatus = async () => {
       el.className = `status-bar status-${cls}`;
       el.textContent = label;
     }
-    if (FINAL_QR_STATUSES.includes(status)) {
+    if (status && !QR_PENDING_STATUSES.includes(status)) {
       stopQrPolling();
     }
   } catch (e) {
