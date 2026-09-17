@@ -1,5 +1,4 @@
 import crypto from 'crypto';
-import fetch from 'node-fetch';
 import { DEVICE, APP, UA_NATIVE } from './config.js';
 import { computeTokenSnMac, computeXSign } from './crypto.js';
 
@@ -35,7 +34,10 @@ export const entranceCookie = (extraUserToken) => {
 // ─── Extract user_token from set-cookie ───
 
 export const extractUserToken = (resp) => {
-  const raw = resp.headers.raw()['set-cookie'] || [];
+  const raw =
+    typeof resp.headers.getSetCookie === 'function'
+      ? resp.headers.getSetCookie()
+      : resp.headers.raw?.()['set-cookie'] || [];
   for (const c of raw) {
     const m = c.match(/user_token=([^;]+)/);
     if (m) return m[1];

@@ -1,7 +1,6 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import fetch from 'node-fetch';
 import { fileURLToPath } from 'url';
 import { KASPI_QRPAY_URL } from './config.js';
 import { signedQrPayHeaders } from './helpers.js';
