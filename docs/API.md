@@ -26,6 +26,7 @@ Kaspi POS Automation предоставляет REST API для работы с 
 - [QR — QR-оплата](#qr--qr-оплата)
   - [POST /api/qr/create](#post-apiqrcreate)
   - [GET /api/qr/status](#get-apiqrstatus)
+  - [GET /api/qr/image](#get-apiqrimage)
 - [History — История операций](#history--история-операций)
   - [POST /api/history/operations](#post-apihistoryoperations)
   - [POST /api/history/details](#post-apihistorydetails)
@@ -33,12 +34,21 @@ Kaspi POS Automation предоставляет REST API для работы с 
   - [POST /api/refund/create](#post-apirefundcreate)
 - [Session — Проверка сессии](#session--проверка-сессии)
   - [GET /api/session/check](#get-apisessioncheck)
+- [Payments — Живые события](#payments--живые-события)
+  - [GET /api/payments/tracked](#get-apipaymentstracked)
+  - [GET /api/payments/events (SSE)](#get-apipaymentsevents-sse)
+- [Reports — Отчёты](#reports--отчёты)
+  - [GET /api/reports/summary](#get-apireportssummary)
+  - [GET /api/reports/payments](#get-apireportspayments)
+  - [GET /api/reports/export.csv](#get-apireportsexportcsv)
+- [Идемпотентность](#идемпотентность)
 - [Webhooks — Уведомления](#webhooks--уведомления)
   - [Настройка](#настройка)
   - [События](#события)
   - [Формат payload](#формат-payload)
   - [Подпись (HMAC)](#подпись-hmac)
   - [Повторные попытки (Retry)](#повторные-попытки-retry)
+  - [GET /api/webhooks, POST /api/webhooks/test](#get-apiwebhooks-post-apiwebhookstest)
 
 ---
 
@@ -55,6 +65,31 @@ API использует 3-шаговую SMS-авторизацию. После
 | `X-Token-SN` | `string` | ✅ | Токен сессии, полученный при авторизации |
 | `X-Vtoken-Secret` | `string` | ✅ | Зашифрованный секрет сессии |
 | `X-Profile-Id` | `string` | ❌ | ID профиля организации |
+
+### API-ключ сервера
+
+Если в `.env` задан `API_KEY` (можно несколько через запятую), **все** запросы к `/api/*`
+(включая `/api/auth/*`) должны содержать один из заголовков:
+
+```
+X-Api-Key: <ключ>
+Authorization: Bearer <ключ>
+```
+
+Без ключа сервер отвечает `401 { "error": "...", "code": "API_KEY_REQUIRED" }`.
+`/health` и статический интерфейс остаются открытыми. Для NS WMS это обязательная мера:
+сервер хранит ключи устройства Kaspi, и без ключа любой, кто достучится до порта, может
+запустить SMS-вход.
+
+### Ограничение частоты запросов
+
+| Область | Лимит по умолчанию | Переменная |
+|---|---|---|
+| `/api/*` (на сессию кассира или IP) | 300 запросов / мин | `RATE_LIMIT_PER_MIN` |
+| `/api/auth/*` (на IP) | 10 запросов / мин | `AUTH_RATE_LIMIT_PER_MIN` |
+
+Превышение → `429 { "code": "RATE_LIMITED" }` и заголовок `Retry-After`. За reverse-proxy
+задайте `TRUST_PROXY` (например `1`), чтобы учитывался реальный IP клиента.
 
 ---
 
@@ -354,9 +389,13 @@ curl -X POST http://localhost:3000/api/invoice/history \
 
 | Поле | Тип | Обязательный | Описание |
 |---|---|---|---|
-| `amount` | `number` | ✅ | Сумма в тенге |
-| `latitude` | `number` | ❌ | Широта (по умолчанию: Алматы) |
-| `longitude` | `number` | ❌ | Долгота (по умолчанию: Алматы) |
+| `amount` | `number` | ✅ | Сумма в тенге (> 0, не более 2 знаков после запятой) |
+| `latitude` | `number` | ❌ | Широта (по умолчанию: `POS_LATITUDE` или Алматы) |
+| `longitude` | `number` | ❌ | Долгота (по умолчанию: `POS_LONGITUDE` или Алматы) |
+| `orderNumber` | `string` | ❌ | Номер чека POS — попадёт в вебхук и отчёты |
+| `withImage` | `boolean` | ❌ | Вернуть готовый SVG в `Data.QrSvg` |
+
+Поддерживает заголовок [`Idempotency-Key`](#идемпотентность).
 
 **Пример запроса:**
 
@@ -366,7 +405,8 @@ curl -X POST http://localhost:3000/api/qr/create \
   -H "X-Token-SN: ..." \
   -H "X-Vtoken-Secret: ..." \
   -H "X-Profile-Id: ..." \
-  -d '{"amount": 500}'
+  -H "Idempotency-Key: 5f0c8e1a-order-1042" \
+  -d '{"amount": 500, "orderNumber": "1042", "withImage": true}'
 ```
 
 **Успешный ответ:**
@@ -405,6 +445,23 @@ curl "http://localhost:3000/api/qr/status?qrOperationId=789012" \
   -H "X-Token-SN: ..." \
   -H "X-Vtoken-Secret: ..."
 ```
+
+---
+
+### `GET /api/qr/image`
+
+Рисует QR-код Kaspi на самом сервере (SVG или PNG) — ссылка на оплату не уходит в сторонние
+QR-сервисы. Принимаются только ссылки `https://qr.kaspi.kz/…` и `https://pay.kaspi.kz/…`.
+
+| Параметр | Описание |
+|---|---|
+| `data` | Ссылка из `QrOriginalToken` (Единый QR) или `QrToken` |
+| `size` | Размер в пикселях, 64…1024 (по умолчанию 256) |
+| `format` | `svg` (по умолчанию) или `png` |
+
+Альтернатива — передать `"withImage": true` в теле `POST /api/qr/create`: тогда ответ сразу
+содержит `Data.QrSvg` для `QrOriginalToken`. Там же можно передать `orderNumber` (номер чека
+POS, попадёт в вебхук и отчёты), `latitude`/`longitude` (по умолчанию — `POS_LATITUDE`/`POS_LONGITUDE`).
 
 ---
 
@@ -533,11 +590,110 @@ curl "http://localhost:3000/api/session/check" \
 { "error": "Описание ошибки" }
 ```
 
-| HTTP-код | Описание |
+| HTTP-код | `code` | Описание |
+|---|---|---|
+| `400` | `VALIDATION_ERROR` | Неверные параметры: сумма ≤ 0 или > `MAX_PAYMENT_AMOUNT`, больше 2 знаков после запятой, телефон не из 10 цифр, нечисловой ID операции, битый JSON |
+| `401` | `API_KEY_REQUIRED` | Нет или неверный API-ключ сервера |
+| `401` | — | Отсутствуют или невалидные заголовки сессии |
+| `404` | — | Неизвестный маршрут `/api/*` |
+| `409` | `IDEMPOTENCY_IN_PROGRESS` | Запрос с тем же `Idempotency-Key` ещё выполняется |
+| `413` | — | Тело запроса больше 100 КБ |
+| `422` | `IDEMPOTENCY_KEY_REUSED` | `Idempotency-Key` уже использован с другим телом |
+| `429` | `RATE_LIMITED` | Превышен лимит запросов |
+| `500` | — | Внутренняя ошибка сервера или ошибка Kaspi API |
+
+Телефон принимается в любом привычном виде (`707 123 45 67`, `+7 (707) 123-45-67`,
+`87071234567`) и нормализуется до 10 цифр.
+
+---
+
+## Payments — Живые события
+
+### `GET /api/payments/tracked`
+
+Платежи текущего профиля, которые сервер сейчас опрашивает (ещё без финального статуса).
+
+```json
+{ "items": [{ "paymentId": "123", "type": "qr", "status": "QrTokenScanned", "amount": 5000,
+  "expireDate": "…", "orderNumber": null, "createdAt": "2026-09-27T10:00:00.000Z" }] }
+```
+
+### `GET /api/payments/events` (SSE)
+
+Поток [Server-Sent Events](https://developer.mozilla.org/docs/Web/API/Server-sent_events) —
+замена клиентскому опросу `/api/qr/status`. Одно соединение на кассу, события только своего
+профиля (`X-Profile-Id`). Авторизация — те же заголовки сессии (и API-ключ), поэтому в браузере
+читайте поток через `fetch()` + `ReadableStream` (так делает `public/app.js`).
+
+| Событие | Когда |
 |---|---|
-| `400` | Отсутствуют обязательные параметры |
-| `401` | Отсутствуют или невалидные заголовки сессии |
-| `500` | Внутренняя ошибка сервера или ошибка Kaspi API |
+| `ready` | Сразу после подключения; `data.tracked` — текущие открытые платежи |
+| `payment.created` | Создан QR или счёт |
+| `payment.status` | Промежуточная смена статуса (`QrTokenScanned`, `PaymentConfirmation`, …) |
+| `payment.success` / `payment.failed` / `payment.expired` / `payment.lost` | Финальный статус (тот же payload, что у вебхука, без `data`) |
+
+```
+event: payment.success
+data: {"event":"payment.success","paymentId":"123","type":"qr","status":"Processed","amount":5000,…}
+```
+
+Каждые 25 с приходит комментарий `: ping`, чтобы прокси не рвали соединение.
+
+---
+
+## Reports — Отчёты
+
+Сервер ведёт локальный журнал завершённых платежей (`payments-ledger.jsonl`, путь меняется
+через `LEDGER_FILE`). В нём есть и то, чего нет в истории Kaspi: истёкшие и потерянные QR.
+Все отчёты ограничены профилем из `X-Profile-Id`.
+
+Общие query-параметры:
+
+| Параметр | Описание |
+|---|---|
+| `from`, `to` | Дни `YYYY-MM-DD` включительно, в часовом поясе `REPORT_TZ` (по умолчанию `Asia/Almaty`). По умолчанию — сегодня |
+| `type` | `qr` или `invoice` |
+| `event` | `payment.success`, `payment.failed`, `payment.expired`, `payment.lost` |
+
+### `GET /api/reports/summary`
+
+```json
+{
+  "from": "2026-09-21", "to": "2026-09-27", "timeZone": "Asia/Almaty",
+  "totals": { "count": 6, "success": 5, "failed": 0, "expired": 1, "lost": 0,
+              "revenue": 10500, "averageCheck": 2100, "conversion": 83.33 },
+  "byType": { "qr": { "count": 3, "success": 3, "revenue": 6000 } },
+  "byDay": [{ "date": "2026-09-27", "count": 2, "success": 2, "revenue": 3250 }]
+}
+```
+
+`revenue` учитывает только `payment.success`; `conversion` — доля успешных в процентах.
+
+### `GET /api/reports/payments`
+
+Последние записи журнала (новые сверху). `limit` — 1…1000, по умолчанию 100.
+
+### `GET /api/reports/export.csv`
+
+CSV (UTF-8 с BOM, открывается в Excel) с колонками
+`timestamp, paymentId, type, event, status, amount, orderNumber, statusDesc`.
+Значения, начинающиеся с `= + - @`, экранируются против formula injection.
+
+---
+
+## Идемпотентность
+
+`POST /api/qr/create`, `POST /api/invoice/create` и `POST /api/refund/create` принимают заголовок
+
+```
+Idempotency-Key: <уникальная строка до 255 символов, например UUID чека>
+```
+
+Если касса повторит запрос после таймаута с тем же ключом и тем же телом, сервер **не** пойдёт в
+Kaspi второй раз, а вернёт сохранённый ответ с заголовком `Idempotent-Replayed: true` — двойного
+QR, счёта или возврата не будет. Ключ живёт 24 часа в памяти процесса и привязан к сессии кассира
+и маршруту. Ошибки (включая `StatusCode ≠ 0` от Kaspi) не кэшируются — такой запрос можно
+повторить с тем же ключом.
 
 ---
 
@@ -629,11 +785,19 @@ curl "http://localhost:3000/api/session/check" \
 
 ### Подпись (HMAC)
 
-Каждый запрос подписывается HMAC SHA-256 с использованием `secret` из конфигурации вебхука. Подпись передаётся в заголовке:
+Каждый запрос подписывается HMAC SHA-256 с использованием `secret` из конфигурации вебхука. Заголовки запроса:
 
 ```
-X-Webhook-Signature: sha256=<hex-digest>
+X-Webhook-Signature:    sha256=<HMAC(secret, body)>
+X-Webhook-Signature-V2: sha256=<HMAC(secret, "<timestamp>.<body>")>
+X-Webhook-Timestamp:    <unix-время в секундах>
+X-Webhook-Id:           <UUID доставки, одинаковый во всех повторах>
+X-Webhook-Event:        payment.success
 ```
+
+`X-Webhook-Signature` сохранён для совместимости. Для новых интеграций проверяйте **V2**:
+отклоняйте запросы, где `X-Webhook-Timestamp` отличается от текущего времени больше чем на 5 минут
+(защита от повторного воспроизведения), а по `X-Webhook-Id` отбрасывайте дубликаты.
 
 **Проверка подписи на стороне получателя (Node.js):**
 
@@ -661,17 +825,34 @@ if (!verifySignature(rawBody, sig, 'your-webhook-secret')) {
 
 ### Повторные попытки (Retry)
 
-Если доставка вебхука не удалась (ошибка сети, таймаут, HTTP-ошибка), система выполняет до **3 попыток** с нарастающей задержкой:
+Если доставка вебхука не удалась (ошибка сети, таймаут или **любой ответ, кроме 2xx**), система повторяет её с нарастающей задержкой. Число попыток — `WEBHOOK_MAX_ATTEMPTS` (по умолчанию **3**):
 
 | Попытка | Задержка |
 |---|---|
 | 1-я (первая) | Немедленно |
 | 2-я | 5 секунд |
 | 3-я | 30 секунд |
+| 4-я | 2 минуты |
+| 5-я | 10 минут |
+| 6-я и далее | 30 минут |
 
 - Таймаут запроса: **10 секунд**.
 - Очередь повторных попыток сохраняется в `webhook-retries.json` и переживает перезапуск сервера.
-- После 3 неудачных попыток уведомление отбрасывается (логируется ошибка).
+- После последней неудачной попытки уведомление отбрасывается (логируется ошибка). Событие при этом всё равно попадает в журнал отчётов.
+
+### `GET /api/webhooks`, `POST /api/webhooks/test`
+
+`GET /api/webhooks` — список настроенных вебхуков (`url`, `events`, `hasSecret`; секреты не отдаются).
+
+`POST /api/webhooks/test` — отправляет подписанное событие `webhook.test` на **каждый** URL и
+возвращает результат, чтобы проверить интеграцию до первой реальной оплаты:
+
+```json
+{ "ok": false, "results": [
+  { "url": "https://wms/webhooks/payments/kaspi_bridge", "events": ["payment.success"], "ok": true, "status": 200, "error": null },
+  { "url": "https://example.com/webhook", "events": [], "ok": false, "status": 500, "error": "HTTP 500 Internal Server Error" }
+] }
+```
 
 ---
 

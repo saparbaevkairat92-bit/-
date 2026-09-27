@@ -1,42 +1,26 @@
 import { Router } from 'express';
 import { KASPI_QRPAY_URL } from '../config.js';
 import { loggedFetch, signedQrPayHeaders } from '../helpers.js';
-import { decryptSecret } from '../crypto.js';
+import { requireAuth } from '../middleware/auth.js';
+import { idempotent } from '../idempotency.js';
+import { parseAmount, parseOperationId, validated } from '../validation.js';
+import { logger } from '../logger.js';
 
 const router = Router();
-
-// Extract session from request headers
-const extractSession = (req) => ({
-  tokenSN: req.headers['x-token-sn'] || null,
-  profileId: req.headers['x-profile-id'] || null,
-  vtokenSecret: req.headers['x-vtoken-secret'] || null,
-});
-
-const requireAuth = (req, res, next) => {
-  const session = extractSession(req);
-  if (!session.tokenSN) return res.status(401).json({ error: 'Missing X-Token-SN header.' });
-  if (!session.vtokenSecret) return res.status(401).json({ error: 'Missing X-Vtoken-Secret header.' });
-  try {
-    session.decryptedSecret = decryptSecret(session.vtokenSecret);
-  } catch {
-    return res.status(401).json({ error: 'Invalid or expired vtokenSecret. Re-authenticate.' });
-  }
-  req.session = session;
-  next();
-};
 
 router.use(requireAuth);
 
 // ─── Return (refund) ───
 
-router.post('/create', async (req, res) => {
-  const { qrOperationId, returnAmount } = req.body;
-  if (!qrOperationId || !returnAmount)
-    return res.status(400).json({ error: 'qrOperationId and returnAmount required' });
-  try {
+router.post(
+  '/create',
+  idempotent,
+  validated(async (req, res) => {
+    const qrOperationId = parseOperationId(req.body.qrOperationId, 'qrOperationId');
+    const returnAmount = parseAmount(req.body.returnAmount, 'returnAmount');
     const url = `${KASPI_QRPAY_URL}/v01/kaspi-qr/history-pos-return`;
     const payload = JSON.stringify({
-      ReturnAmount: Number(returnAmount),
+      ReturnAmount: returnAmount,
       QrOperationId: Number(qrOperationId),
       DeviceInterface: 'Pos',
     });
@@ -46,10 +30,13 @@ router.post('/create', async (req, res) => {
       headers,
       body: payload,
     });
-    res.json(await resp.json());
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+    const body = await resp.json();
+    logger.info(
+      'REFUND',
+      `Refund ${returnAmount} for operation ${qrOperationId} → StatusCode ${body.StatusCode ?? resp.status}`,
+    );
+    res.json(body);
+  }),
+);
 
 export default router;

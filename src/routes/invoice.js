@@ -1,57 +1,41 @@
 import { Router } from 'express';
 import { KASPI_QRPAY_URL } from '../config.js';
 import { loggedFetch, signedQrPayHeaders } from '../helpers.js';
-import { decryptSecret } from '../crypto.js';
 import { trackPayment } from '../polling.js';
+import { requireAuth, trackingHeaders } from '../middleware/auth.js';
+import { idempotent } from '../idempotency.js';
+import { normalizePhone, parseAmount, parseOperationId, validated } from '../validation.js';
 
 const router = Router();
 
-// Extract session from request headers
-const extractSession = (req) => ({
-  tokenSN: req.headers['x-token-sn'] || null,
-  profileId: req.headers['x-profile-id'] || null,
-  vtokenSecret: req.headers['x-vtoken-secret'] || null,
-});
-
-const requireAuth = (req, res, next) => {
-  const session = extractSession(req);
-  if (!session.tokenSN) return res.status(401).json({ error: 'Missing X-Token-SN header.' });
-  if (!session.vtokenSecret) return res.status(401).json({ error: 'Missing X-Vtoken-Secret header.' });
-  try {
-    session.decryptedSecret = decryptSecret(session.vtokenSecret);
-  } catch {
-    return res.status(401).json({ error: 'Invalid or expired vtokenSecret. Re-authenticate.' });
-  }
-  req.session = session;
-  next();
-};
-
 router.use(requireAuth);
+
+const MAX_COMMENT_LENGTH = 200;
 
 // ─── Client info ───
 
-router.get('/client-info', async (req, res) => {
-  const { phoneNumber } = req.query;
-  if (!phoneNumber) return res.status(400).json({ error: 'phoneNumber required' });
-
-  try {
+router.get(
+  '/client-info',
+  validated(async (req, res) => {
+    const phoneNumber = normalizePhone(req.query.phoneNumber);
     const url = `${KASPI_QRPAY_URL}/v01/remote/client-info?phoneNumber=${phoneNumber}`;
     const resp = await loggedFetch(url, { headers: signedQrPayHeaders(url, req.session) });
     res.json(await resp.json());
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+  }),
+);
 
 // ─── Create invoice ───
 
-router.post('/create', async (req, res) => {
-  const { phoneNumber, amount, comment } = req.body;
-  if (!phoneNumber || !amount) return res.status(400).json({ error: 'phoneNumber and amount required' });
+router.post(
+  '/create',
+  idempotent,
+  validated(async (req, res) => {
+    const phoneNumber = normalizePhone(req.body.phoneNumber);
+    const amount = parseAmount(req.body.amount);
+    const comment = String(req.body.comment || '').slice(0, MAX_COMMENT_LENGTH);
 
-  try {
     const url = `${KASPI_QRPAY_URL}/v01/remote/create`;
-    const payload = JSON.stringify({ PhoneNumber: phoneNumber, Amount: Number(amount), Comment: comment || '' });
+    const payload = JSON.stringify({ PhoneNumber: phoneNumber, Amount: amount, Comment: comment });
     const headers = { ...signedQrPayHeaders(url, req.session, payload), 'Content-Type': 'application/json' };
     const resp = await loggedFetch(url, {
       method: 'POST',
@@ -61,50 +45,35 @@ router.post('/create', async (req, res) => {
     const kaspiResponse = await resp.json();
     const d = kaspiResponse.Data;
     if (d && d.QrOperationId) {
-      trackPayment(
-        d.QrOperationId,
-        'invoice',
-        {
-          tokenSN: req.session.tokenSN,
-          vtokenSecret: req.headers['x-vtoken-secret'],
-          profileId: req.session.profileId,
-        },
-        {
-          amount: d.Amount,
-          clientMobile: d.ClientMobile,
-          receiptUrl: d.ReceiptUrl,
-          orderNumber: d.OrderNumber,
-        },
-      );
+      trackPayment(d.QrOperationId, 'invoice', trackingHeaders(req), {
+        amount: d.Amount ?? amount,
+        clientMobile: d.ClientMobile,
+        receiptUrl: d.ReceiptUrl,
+        orderNumber: d.OrderNumber,
+      });
     }
     res.json(kaspiResponse);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+  }),
+);
 
 // ─── Invoice details ───
 
-router.get('/details', async (req, res) => {
-  const { operationId } = req.query;
-  if (!operationId) return res.status(400).json({ error: 'operationId required' });
-
-  try {
+router.get(
+  '/details',
+  validated(async (req, res) => {
+    const operationId = parseOperationId(req.query.operationId);
     const url = `${KASPI_QRPAY_URL}/v02/remote/details?operationId=${operationId}`;
     const resp = await loggedFetch(url, { headers: signedQrPayHeaders(url, req.session) });
     res.json(await resp.json());
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+  }),
+);
 
 // ─── Cancel invoice ───
 
-router.post('/cancel', async (req, res) => {
-  const { operationId } = req.body;
-  if (!operationId) return res.status(400).json({ error: 'operationId required' });
-
-  try {
+router.post(
+  '/cancel',
+  validated(async (req, res) => {
+    const operationId = parseOperationId(req.body.operationId);
     const url = `${KASPI_QRPAY_URL}/v01/remote/cancel`;
     const payload = JSON.stringify({ qrOperationId: Number(operationId) });
     const headers = { ...signedQrPayHeaders(url, req.session, payload), 'Content-Type': 'application/json' };
@@ -114,17 +83,17 @@ router.post('/cancel', async (req, res) => {
       body: payload,
     });
     res.json(await resp.json());
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+  }),
+);
 
 // ─── Invoice history ───
 
-router.post('/history', async (req, res) => {
-  try {
+router.post(
+  '/history',
+  validated(async (req, res) => {
+    const maxResult = Math.min(Math.max(Number(req.body?.maxResult) || 20, 1), 100);
     const url = `${KASPI_QRPAY_URL}/v01/remote/history`;
-    const payload = JSON.stringify({ MaxResult: 20 });
+    const payload = JSON.stringify({ MaxResult: maxResult });
     const headers = { ...signedQrPayHeaders(url, req.session, payload), 'Content-Type': 'application/json' };
     const resp = await loggedFetch(url, {
       method: 'POST',
@@ -132,9 +101,7 @@ router.post('/history', async (req, res) => {
       body: payload,
     });
     res.json(await resp.json());
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+  }),
+);
 
 export default router;

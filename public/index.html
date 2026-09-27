@@ -235,9 +235,9 @@
       }
       .tab {
         flex: 1;
-        padding: 10px;
+        padding: 10px 4px;
         text-align: center;
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 600;
         cursor: pointer;
         background: #fff;
@@ -274,6 +274,57 @@
       .user-org {
         font-size: 13px;
         color: #888;
+      }
+      .live-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #bbb;
+        margin-left: 6px;
+        vertical-align: middle;
+      }
+      .live-dot.on {
+        background: #2e7d32;
+      }
+      .qr-box svg {
+        width: 256px;
+        max-width: 100%;
+        height: auto;
+        border-radius: 8px;
+      }
+      .tiles {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+      }
+      .tile {
+        background: #f7f7f7;
+        border-radius: 10px;
+        padding: 10px;
+        text-align: center;
+      }
+      .tile-label {
+        font-size: 12px;
+        color: #888;
+      }
+      .tile-value {
+        font-weight: 700;
+        font-size: 18px;
+      }
+      #toasts {
+        position: fixed;
+        left: 50%;
+        bottom: 16px;
+        transform: translateX(-50%);
+        width: min(420px, calc(100% - 32px));
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        z-index: 100;
+      }
+      .toast {
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
       }
     </style>
   </head>
@@ -334,7 +385,10 @@
           <div class="user-info">
             <div class="user-avatar" id="userAvatar">K</div>
             <div class="user-details">
-              <div class="user-name" id="userName">—</div>
+              <div class="user-name">
+                <span id="userName">—</span
+                ><span class="live-dot" id="liveDot" title="Уведомления об оплатах в реальном времени"></span>
+              </div>
               <div class="user-org" id="userOrg">—</div>
             </div>
             <button
@@ -353,6 +407,7 @@
           <button class="tab" id="tabQr" onclick="switchTab('qr')">Создать QR</button>
           <button class="tab" id="tabHistory" onclick="switchTab('history')">История</button>
           <button class="tab" id="tabSales" onclick="switchTab('sales')">Продажи</button>
+          <button class="tab" id="tabReports" onclick="switchTab('reports')">Отчёт</button>
         </div>
 
         <!-- Invoice Tab -->
@@ -476,8 +531,32 @@
             </div>
           </div>
         </div>
+
+        <!-- Reports Tab -->
+        <div id="reportsTab" class="hidden">
+          <div class="card">
+            <h2>Отчёт по платежам</h2>
+            <label>Период</label>
+            <select id="reportPeriod" onchange="loadReport()">
+              <option value="1">Сегодня</option>
+              <option value="7">7 дней</option>
+              <option value="30">30 дней</option>
+            </select>
+            <div id="reportSummary" style="margin: 12px 0"></div>
+            <div style="display: flex; gap: 8px">
+              <button class="btn btn-secondary" onclick="loadReport()">Обновить</button>
+              <button class="btn btn-primary" onclick="downloadReportCsv()">Скачать CSV</button>
+            </div>
+          </div>
+          <div class="card">
+            <h2>Последние платежи</h2>
+            <div id="reportPayments"></div>
+          </div>
+        </div>
       </div>
     </div>
+
+    <div id="toasts"></div>
 
     <script src="app.js"></script>
   </body>

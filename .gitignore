@@ -16,5 +16,6 @@ device.json.bak
 webhooks.json
 tracked-payments.json
 webhook-retries.json
+payments-ledger.jsonl
 logs/
 last-session.json

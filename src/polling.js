@@ -6,7 +6,9 @@ import { fileURLToPath } from 'url';
 import { KASPI_QRPAY_URL } from './config.js';
 import { signedQrPayHeaders } from './helpers.js';
 import { decryptSecret } from './crypto.js';
-import { getWebhooksByEvent } from './webhookStore.js';
+import { getWebhooksByEvent, loadWebhooks } from './webhookStore.js';
+import { ledger } from './ledger.js';
+import { paymentEvents } from './events.js';
 import { logger } from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -125,6 +127,15 @@ export const trackPayment = (paymentId, type, sessionHeaders, meta = {}) => {
   });
   saveTracked();
   logger.info('POLLING', `Tracking ${type} payment ${paymentId}`);
+  paymentEvents.emit('payment', {
+    event: 'payment.created',
+    paymentId: String(paymentId),
+    type,
+    status: type === 'qr' ? 'QrTokenCreated' : 'RemotePaymentCreated',
+    amount: meta.amount ?? null,
+    profileId: sessionHeaders?.profileId ?? null,
+    timestamp: new Date().toISOString(),
+  });
 };
 
 // ─── Fetch status from Kaspi (quiet — no loggedFetch) ───
@@ -171,65 +182,89 @@ const fetchStatus = async (entry) => {
 
 // ─── Send webhooks ───
 
+const WEBHOOK_MAX_ATTEMPTS = Math.max(1, Number(process.env.WEBHOOK_MAX_ATTEMPTS) || 3);
+// Delay before attempt N+1 (5s, 30s, 2m, 10m, 30m …)
+const RETRY_DELAYS_MS = [5000, 30000, 120000, 600000, 1800000];
+const retryDelay = (attempt) => RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)];
+
 const fetchWithTimeout = async (url, options, timeoutMs = 10000) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const resp = await fetch(url, { ...options, signal: controller.signal });
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
     clearTimeout(timer);
-    return resp;
-  } catch (err) {
-    clearTimeout(timer);
-    throw err;
   }
 };
 
-const sendWebhook = async (hook, payload, attempt = 1) => {
-  const body = JSON.stringify(payload);
-  const signature =
+export const signWebhook = (secret, body, timestamp) => ({
+  'X-Webhook-Signature':
     'sha256=' +
     crypto
-      .createHmac('sha256', hook.secret || '')
+      .createHmac('sha256', secret || '')
       .update(body)
-      .digest('hex');
+      .digest('hex'),
+  // v2 binds the timestamp into the signature so receivers can reject replays
+  'X-Webhook-Signature-V2':
+    'sha256=' +
+    crypto
+      .createHmac('sha256', secret || '')
+      .update(`${timestamp}.${body}`)
+      .digest('hex'),
+});
 
+// Single delivery attempt; any non-2xx answer counts as a failure
+export const deliverWebhook = async (hook, payload, deliveryId = crypto.randomUUID()) => {
+  const body = JSON.stringify(payload);
+  const timestamp = String(Math.floor(Date.now() / 1000));
   try {
     const resp = await fetchWithTimeout(hook.url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Webhook-Signature': signature,
+        'X-Webhook-Id': deliveryId,
+        'X-Webhook-Event': payload.event,
+        'X-Webhook-Timestamp': timestamp,
+        ...signWebhook(hook.secret, body, timestamp),
       },
       body,
     });
-    logger.info('WEBHOOK', `→ ${hook.url} | ${resp.status} ${resp.statusText}`);
-    // Remove from pending retries on success
-    pendingRetries = pendingRetries.filter(
-      (r) =>
-        !(r.hook.url === hook.url && r.payload.paymentId === payload.paymentId && r.payload.event === payload.event),
-    );
-    saveRetries();
+    return { ok: resp.ok, status: resp.status, error: resp.ok ? null : `HTTP ${resp.status} ${resp.statusText}` };
   } catch (err) {
-    logger.error('WEBHOOK', `→ ${hook.url} | attempt ${attempt} FAILED: ${err.message}`);
-    if (attempt < 3) {
-      // Save retry to disk so it survives restarts
-      pendingRetries.push({
-        hook,
-        payload,
-        attempt: attempt + 1,
-        executeAfter: Date.now() + (attempt === 1 ? 5000 : 30000),
-      });
-      saveRetries();
-    } else {
-      logger.error('WEBHOOK', `→ ${hook.url} | FAILED after 3 retries`);
-      // Remove from pending retries
-      pendingRetries = pendingRetries.filter(
-        (r) =>
-          !(r.hook.url === hook.url && r.payload.paymentId === payload.paymentId && r.payload.event === payload.event),
-      );
-      saveRetries();
-    }
+    return { ok: false, status: null, error: err.message };
   }
+};
+
+const dropRetry = (hook, payload) => {
+  pendingRetries = pendingRetries.filter(
+    (r) => !(r.hook.url === hook.url && r.payload.paymentId === payload.paymentId && r.payload.event === payload.event),
+  );
+};
+
+const sendWebhook = async (hook, payload, attempt = 1, deliveryId = crypto.randomUUID()) => {
+  const result = await deliverWebhook(hook, payload, deliveryId);
+  if (result.ok) {
+    logger.info('WEBHOOK', `→ ${hook.url} | ${result.status}`);
+    dropRetry(hook, payload);
+    saveRetries();
+    return;
+  }
+
+  logger.error('WEBHOOK', `→ ${hook.url} | attempt ${attempt} FAILED: ${result.error}`);
+  dropRetry(hook, payload);
+  if (attempt < WEBHOOK_MAX_ATTEMPTS) {
+    // Save retry to disk so it survives restarts
+    pendingRetries.push({
+      hook,
+      payload,
+      deliveryId,
+      attempt: attempt + 1,
+      executeAfter: Date.now() + retryDelay(attempt),
+    });
+  } else {
+    logger.error('WEBHOOK', `→ ${hook.url} | FAILED after ${attempt} attempts`);
+  }
+  saveRetries();
 };
 
 const sendWebhooks = (event, payload) => {
@@ -237,6 +272,26 @@ const sendWebhooks = (event, payload) => {
   for (const hook of hooks) {
     sendWebhook(hook, payload);
   }
+};
+
+// Sends a webhook.test event to every configured hook and reports each result
+export const sendTestWebhooks = async () => {
+  const payload = { event: 'webhook.test', paymentId: null, timestamp: new Date().toISOString() };
+  const hooks = loadWebhooks().filter((h) => h.url);
+  return Promise.all(
+    hooks.map(async (hook) => ({ url: hook.url, events: hook.events || [], ...(await deliverWebhook(hook, payload)) })),
+  );
+};
+
+// ─── Final event: webhooks + ledger + live subscribers ───
+
+const dispatch = (event, entry, data) => {
+  const payload = buildPayload(event, entry, data);
+  sendWebhooks(event, payload);
+  const { data: _data, ...summary } = payload;
+  const profileId = entry.sessionHeaders?.profileId ?? null;
+  ledger.record({ ...summary, profileId, createdAt: new Date(entry.createdAt).toISOString() });
+  paymentEvents.emit('payment', { ...summary, profileId });
 };
 
 // ─── Process pending retries ───
@@ -249,7 +304,7 @@ const processRetries = async () => {
   saveRetries();
 
   for (const r of due) {
-    await sendWebhook(r.hook, r.payload, r.attempt);
+    await sendWebhook(r.hook, r.payload, r.attempt, r.deliveryId);
   }
 };
 
@@ -274,13 +329,10 @@ const pollOnce = async () => {
   for (const [id, entry] of trackedPayments) {
     if (Date.now() - entry.createdAt > MAX_TRACKING_MS) {
       logger.warn('POLLING', `Payment ${id} tracked for over 24h without a final status — dropping`);
-      sendWebhooks(
-        'payment.lost',
-        buildPayload('payment.lost', entry, {
-          Status: entry.status,
-          StatusDesc: 'Окончательный статус платежа не получен в течение 24 часов',
-        }),
-      );
+      dispatch('payment.lost', entry, {
+        Status: entry.status,
+        StatusDesc: 'Окончательный статус платежа не получен в течение 24 часов',
+      });
       trackedPayments.delete(id);
       changed = true;
       continue;
@@ -291,10 +343,7 @@ const pollOnce = async () => {
       const expiry = new Date(entry.meta.expireDate).getTime();
       if (Date.now() > expiry && resolveEvent(entry.type, entry.status) === null) {
         logger.info('POLLING', `Payment ${id} expired (TTL)`);
-        sendWebhooks(
-          'payment.expired',
-          buildPayload('payment.expired', entry, { Status: 'Expired', StatusDesc: 'Время оплаты истекло' }),
-        );
+        dispatch('payment.expired', entry, { Status: 'Expired', StatusDesc: 'Время оплаты истекло' });
         trackedPayments.delete(id);
         changed = true;
         continue;
@@ -308,13 +357,10 @@ const pollOnce = async () => {
       entry.retryCount++;
       if (entry.retryCount > 3) {
         logger.warn('POLLING', `Payment ${id} — session expired, sending session.expired webhook`);
-        sendWebhooks(
-          'payment.failed',
-          buildPayload('payment.failed', entry, {
-            Status: 'SessionExpired',
-            StatusDesc: 'Сессия Kaspi истекла, невозможно проверить статус платежа',
-          }),
-        );
+        dispatch('payment.failed', entry, {
+          Status: 'SessionExpired',
+          StatusDesc: 'Сессия Kaspi истекла, невозможно проверить статус платежа',
+        });
         trackedPayments.delete(id);
         changed = true;
       }
@@ -325,13 +371,10 @@ const pollOnce = async () => {
       // Kaspi returns StatusCode -101001 when session was evicted (login from another device)
       if (result && result.StatusCode === -101001) {
         logger.warn('POLLING', `Payment ${id} — session evicted (StatusCode -101001)`);
-        sendWebhooks(
-          'payment.lost',
-          buildPayload('payment.lost', entry, {
-            Status: 'SessionExpired',
-            StatusDesc: 'Сессия Kaspi вытеснена (вход с другого устройства), статус платежа неизвестен',
-          }),
-        );
+        dispatch('payment.lost', entry, {
+          Status: 'SessionExpired',
+          StatusDesc: 'Сессия Kaspi вытеснена (вход с другого устройства), статус платежа неизвестен',
+        });
         trackedPayments.delete(id);
         changed = true;
         continue;
@@ -340,13 +383,10 @@ const pollOnce = async () => {
       entry.retryCount++;
       if (entry.retryCount > 10) {
         logger.warn('POLLING', `Removing payment ${id} after 10 failed attempts`);
-        sendWebhooks(
-          'payment.lost',
-          buildPayload('payment.lost', entry, {
-            Status: 'PollingFailed',
-            StatusDesc: `Не удалось получить статус платежа после ${entry.retryCount} попыток`,
-          }),
-        );
+        dispatch('payment.lost', entry, {
+          Status: 'PollingFailed',
+          StatusDesc: `Не удалось получить статус платежа после ${entry.retryCount} попыток`,
+        });
         trackedPayments.delete(id);
         changed = true;
       }
@@ -362,10 +402,20 @@ const pollOnce = async () => {
     logger.info('POLLING', `Payment ${id}: ${entry.status} → ${newStatus}`);
     entry.status = newStatus;
     changed = true;
+    paymentEvents.emit('payment', {
+      event: 'payment.status',
+      paymentId: entry.paymentId,
+      type: entry.type,
+      status: newStatus,
+      statusDesc: result.Data.StatusDesc || '',
+      amount: entry.meta.amount ?? null,
+      profileId: entry.sessionHeaders?.profileId ?? null,
+      timestamp: new Date().toISOString(),
+    });
 
     const event = resolveEvent(entry.type, newStatus);
     if (event) {
-      sendWebhooks(event, buildPayload(event, entry, result.Data));
+      dispatch(event, entry, result.Data);
       trackedPayments.delete(id);
     }
   }
@@ -437,3 +487,19 @@ export const stopPolling = () => {
 };
 
 export const getTrackedPayments = () => Object.fromEntries(trackedPayments);
+
+// Tracked payments without session secrets, optionally limited to one Kaspi profile
+export const listTrackedPayments = (profileId) =>
+  [...trackedPayments.values()]
+    .filter((e) => profileId === undefined || String(e.sessionHeaders?.profileId ?? '') === String(profileId ?? ''))
+    .map((e) => ({
+      paymentId: e.paymentId,
+      type: e.type,
+      status: e.status,
+      amount: e.meta.amount ?? null,
+      expireDate: e.meta.expireDate ?? null,
+      orderNumber: e.meta.orderNumber ?? null,
+      createdAt: new Date(e.createdAt).toISOString(),
+    }));
+
+export const trackedCount = () => trackedPayments.size;

@@ -33,18 +33,56 @@ const sessionHeaders = () => {
   return h;
 };
 
-const apiFetch = async (path, opts = {}) => {
-  opts.headers = { ...sessionHeaders(), ...(opts.headers || {}) };
-  const resp = await fetch(API + path, opts);
-  return resp.json();
+// ─── Server API key (only needed when the server sets API_KEY) ───
+
+const API_KEY_STORAGE = 'kaspi_api_key';
+
+const apiKeyHeaders = () => {
+  const key = localStorage.getItem(API_KEY_STORAGE);
+  return key ? { 'X-Api-Key': key } : {};
 };
 
-const apiPost = (path, body) =>
+const rawFetch = async (path, opts = {}, retried = false) => {
+  const resp = await fetch(API + path, {
+    ...opts,
+    headers: { ...apiKeyHeaders(), ...sessionHeaders(), ...(opts.headers || {}) },
+  });
+  if (resp.status === 401 && !retried) {
+    const body = await resp
+      .clone()
+      .json()
+      .catch(() => ({}));
+    if (body.code === 'API_KEY_REQUIRED') {
+      const key = prompt('Сервер защищён API-ключом. Введите ключ:');
+      if (key) {
+        localStorage.setItem(API_KEY_STORAGE, key.trim());
+        return rawFetch(path, opts, true);
+      }
+    }
+  }
+  return resp;
+};
+
+const apiFetch = async (path, opts = {}) => (await rawFetch(path, opts)).json();
+
+// Protects against double charges when the cashier double-clicks or the network retries
+const newIdempotencyKey = () =>
+  crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+const escapeHtml = (v) =>
+  String(v ?? '').replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+  );
+
+const apiPost = (path, body, headers = {}) =>
   apiFetch(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...headers },
     ...(body !== undefined && { body: JSON.stringify(body) }),
   });
+
+const apiPostOnce = (path, body) => apiPost(path, body, { 'Idempotency-Key': newIdempotencyKey() });
 
 // ─── Session Persistence (localStorage) ───
 
@@ -79,6 +117,7 @@ const tryRestoreSession = async () => {
     // Verify session is still active on the server
     const result = await checkSession();
     if (!result.active) {
+      stopLiveEvents();
       clearSession();
       $('mainScreen').classList.add('hidden');
       $('authScreen').classList.remove('hidden');
@@ -217,6 +256,7 @@ const verifyOtp = async () => {
 const showMainScreen = (data) => {
   $('authScreen').classList.add('hidden');
   $('mainScreen').classList.remove('hidden');
+  startLiveEvents();
   if (data) {
     $('userName').textContent = data.phone || '—';
     $('userOrg').textContent = data.orgName || '—';
@@ -225,6 +265,7 @@ const showMainScreen = (data) => {
 };
 
 const logout = async () => {
+  stopLiveEvents();
   const { tokenSN } = getSession();
   clearSession();
   await apiPost('/api/auth/logout', { tokenSN });
@@ -236,17 +277,16 @@ const logout = async () => {
   showAuthMsg('', '');
 };
 
+const TABS = { invoice: 'Invoice', qr: 'Qr', history: 'History', sales: 'Sales', reports: 'Reports' };
+
 const switchTab = (tab) => {
-  $('invoiceTab').classList.toggle('hidden', tab !== 'invoice');
-  $('qrTab').classList.toggle('hidden', tab !== 'qr');
-  $('historyTab').classList.toggle('hidden', tab !== 'history');
-  $('salesTab').classList.toggle('hidden', tab !== 'sales');
-  $('tabInvoice').classList.toggle('active', tab === 'invoice');
-  $('tabQr').classList.toggle('active', tab === 'qr');
-  $('tabHistory').classList.toggle('active', tab === 'history');
-  $('tabSales').classList.toggle('active', tab === 'sales');
+  for (const [name, suffix] of Object.entries(TABS)) {
+    $(`${name}Tab`).classList.toggle('hidden', tab !== name);
+    $(`tab${suffix}`).classList.toggle('active', tab === name);
+  }
   if (tab === 'history') loadHistory();
   if (tab === 'sales') loadSales();
+  if (tab === 'reports') loadReport();
 };
 
 // ─── Invoice ───
@@ -318,7 +358,7 @@ const createInvoice = async () => {
   btn.innerHTML = 'Создание...<span class="loader"></span>';
 
   try {
-    const resp = await apiPost('/api/invoice/create', {
+    const resp = await apiPostOnce('/api/invoice/create', {
       phoneNumber: phone,
       amount: Number(amount),
       comment,
@@ -391,20 +431,20 @@ const stopQrPolling = () => {
   }
 };
 
+const showQrStatus = (status) => {
+  if (!status) return;
+  const { label, cls } = qrStatusBadge(status);
+  const el = $('qrStatus');
+  el.className = `status-bar status-${cls}`;
+  el.textContent = label;
+  if (!QR_PENDING_STATUSES.includes(status)) stopQrPolling();
+};
+
 const pollQrStatus = async () => {
   if (!qrOperationId) return;
   try {
     const resp = await apiFetch(`/api/qr/status?qrOperationId=${qrOperationId}`);
-    const status = resp.Data?.Status;
-    if (status) {
-      const { label, cls } = qrStatusBadge(status);
-      const el = $('qrStatus');
-      el.className = `status-bar status-${cls}`;
-      el.textContent = label;
-    }
-    if (status && !QR_PENDING_STATUSES.includes(status)) {
-      stopQrPolling();
-    }
+    showQrStatus(resp.Data?.Status);
   } catch (e) {
     console.error('QR polling error:', e);
   }
@@ -427,11 +467,8 @@ const startQrCountdown = (seconds) => {
   qrCountdownTimer = setInterval(tick, 1000);
 };
 
-const generateQrSvg = (text, size = 256) => {
-  // Simple QR placeholder using a data URL image via an API
-  // For production, use a proper QR library; here we use a public API fallback
-  return `<img src="https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(text)}" alt="QR Code" style="max-width:100%;border-radius:8px;">`;
-};
+// QR is rendered by our own server — the payment link never leaves it
+const renderQr = (svg) => `<div class="qr-box">${svg || '<p style="color:#c62828;">QR не получен</p>'}</div>`;
 
 const createQr = async () => {
   const amount = $('qrAmount').value;
@@ -444,7 +481,7 @@ const createQr = async () => {
   stopQrPolling();
 
   try {
-    const resp = await apiPost('/api/qr/create', { amount: Number(amount) });
+    const resp = await apiPostOnce('/api/qr/create', { amount: Number(amount), withImage: true });
 
     if (resp.Data?.QrToken) {
       qrOperationId = resp.Data.QrOperationId;
@@ -452,7 +489,7 @@ const createQr = async () => {
       const pollInterval = (parseInt(options.qrCodeScanEventPollingInterval) || 3) * 1000;
       const waitTimeout = parseInt(options.qrCodeScanWaitTimeout) || 180;
 
-      $('qrCodeContainer').innerHTML = generateQrSvg(resp.Data.QrOriginalToken);
+      $('qrCodeContainer').innerHTML = renderQr(resp.Data.QrSvg);
       $('qrStatus').className = 'status-bar status-info';
       $('qrStatus').textContent = 'Ожидание сканирования...';
       $('qrResult').classList.remove('hidden');
@@ -683,7 +720,7 @@ const createRefund = async () => {
   btn.innerHTML = 'Возврат...<span class="loader"></span>';
   msg.classList.add('hidden');
   try {
-    const resp = await apiPost('/api/refund/create', { qrOperationId: salesOpId, returnAmount: Number(amount) });
+    const resp = await apiPostOnce('/api/refund/create', { qrOperationId: salesOpId, returnAmount: Number(amount) });
     if (resp.StatusCode === 0) {
       msg.className = 'status-bar status-ok';
       msg.textContent = 'Возврат выполнен успешно';
@@ -701,6 +738,181 @@ const createRefund = async () => {
   } finally {
     btn.disabled = false;
     btn.textContent = 'Сделать возврат';
+  }
+};
+
+// ─── Live payment events (SSE over fetch, so auth headers can be sent) ───
+
+let liveController = null;
+let liveRetryTimer = null;
+
+const EVENT_TOASTS = {
+  'payment.success': ['Оплата получена', 'ok'],
+  'payment.failed': ['Оплата не прошла', 'err'],
+  'payment.expired': ['Время оплаты истекло', 'warn'],
+  'payment.lost': ['Статус платежа неизвестен', 'warn'],
+};
+
+const showToast = (text, cls) => {
+  const el = document.createElement('div');
+  el.className = `toast status-bar status-${cls}`;
+  el.textContent = text;
+  $('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 6000);
+};
+
+const handleLiveEvent = (name, data) => {
+  if (name === 'ready') {
+    $('liveDot').classList.add('on');
+    return;
+  }
+  if (data.type === 'qr' && String(data.paymentId) === String(qrOperationId)) showQrStatus(data.status);
+  if (data.type === 'invoice' && String(data.paymentId) === String(currentOpId)) refreshInvoice();
+  const toast = EVENT_TOASTS[name];
+  if (toast) showToast(`${toast[0]}${data.amount ? ` · ${data.amount} ₸` : ''} (#${data.paymentId})`, toast[1]);
+  if (!$('reportsTab').classList.contains('hidden') && toast) loadReport();
+};
+
+const stopLiveEvents = () => {
+  clearTimeout(liveRetryTimer);
+  if (liveController) liveController.abort();
+  liveController = null;
+  $('liveDot').classList.remove('on');
+};
+
+const startLiveEvents = async () => {
+  if (liveController) return;
+  const { tokenSN, vtokenSecret } = getSession();
+  if (!tokenSN || !vtokenSecret) return;
+  liveController = new AbortController();
+  const controller = liveController;
+  try {
+    const resp = await rawFetch('/api/payments/events', { signal: controller.signal });
+    // A rejected session will not start working by itself — stop instead of reconnecting forever
+    if (resp.status === 401) {
+      stopLiveEvents();
+      return;
+    }
+    if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        let name = 'message';
+        let data = '';
+        for (const line of chunk.split('\n')) {
+          if (line.startsWith('event: ')) name = line.slice(7);
+          else if (line.startsWith('data: ')) data += line.slice(6);
+        }
+        if (data) {
+          try {
+            handleLiveEvent(name, JSON.parse(data));
+          } catch (e) {
+            console.error('Live event error:', e);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    if (controller.signal.aborted) return;
+    console.warn('Live events disconnected:', e.message);
+  }
+  if (liveController !== controller) return;
+  // Reconnect unless we logged out
+  liveController = null;
+  $('liveDot').classList.remove('on');
+  liveRetryTimer = setTimeout(startLiveEvents, 5000);
+};
+
+// ─── Reports (local payments ledger) ───
+
+const EVENT_LABELS = {
+  'payment.success': ['Оплачено', 'paid'],
+  'payment.failed': ['Отказ', 'canceled'],
+  'payment.expired': ['Истёк', 'expired'],
+  'payment.lost': ['Неизвестно', 'pending'],
+};
+
+const ymd = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+const reportRange = () => {
+  const days = Number($('reportPeriod').value) || 1;
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - (days - 1));
+  return `from=${ymd(from)}&to=${ymd(to)}`;
+};
+
+const tile = (label, value, color) =>
+  `<div class="tile"><div class="tile-label">${label}</div><div class="tile-value" style="color:${color}">${value}</div></div>`;
+
+const loadReport = async () => {
+  const box = $('reportSummary');
+  const list = $('reportPayments');
+  box.innerHTML = '<p style="text-align:center;color:#888;">Загрузка...</p>';
+  try {
+    const range = reportRange();
+    const [summary, payments] = await Promise.all([
+      apiFetch(`/api/reports/summary?${range}`),
+      apiFetch(`/api/reports/payments?${range}&limit=50`),
+    ]);
+    if (summary.error) throw new Error(summary.error);
+    const t = summary.totals;
+    box.innerHTML = `<div class="tiles">
+      ${tile('Выручка', `${t.revenue} ₸`, '#2e7d32')}
+      ${tile('Оплат', t.success, '#1a1a1a')}
+      ${tile('Средний чек', `${t.averageCheck} ₸`, '#1a1a1a')}
+      ${tile('Конверсия', `${t.conversion}%`, '#1565c0')}
+    </div>
+    <div style="font-size:12px;color:#888;text-align:center;margin-top:8px;">
+      Отказы: ${t.failed} · Истекли: ${t.expired} · Неизвестно: ${t.lost}
+    </div>
+    ${summary.byDay
+      .map(
+        (d) =>
+          `<div class="detail-row"><span class="detail-label">${escapeHtml(d.date)}</span><span class="detail-value">${d.revenue} ₸ · ${d.success}/${d.count}</span></div>`,
+      )
+      .join('')}`;
+    const items = payments.items || [];
+    list.innerHTML = items.length
+      ? items
+          .map((p) => {
+            const [label, cls] = EVENT_LABELS[p.event] || [p.event, 'pending'];
+            return `<div class="op-item"><div class="op-row">
+              <div><div class="op-name">${p.type === 'qr' ? 'QR' : 'Счёт'} #${escapeHtml(p.paymentId)}</div>
+              <div class="op-date">${new Date(p.timestamp).toLocaleString('ru')}</div></div>
+              <div style="text-align:right;"><div class="op-amount">${escapeHtml(p.amount ?? '—')} ₸</div>
+              <span class="badge badge-${cls}">${label}</span></div>
+            </div></div>`;
+          })
+          .join('')
+      : '<p style="text-align:center;color:#888;">Нет платежей за период</p>';
+  } catch (e) {
+    box.innerHTML = `<p style="color:#c62828;">Ошибка: ${escapeHtml(e.message)}</p>`;
+  }
+};
+
+const downloadReportCsv = async () => {
+  try {
+    const resp = await rawFetch(`/api/reports/export.csv?${reportRange()}`);
+    if (!resp.ok) throw new Error(errorText(await resp.json().catch(() => ({})), `HTTP ${resp.status}`));
+    const blob = await resp.blob();
+    const name = /filename="([^"]+)"/.exec(resp.headers.get('Content-Disposition') || '')?.[1] || 'kaspi-payments.csv';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch (e) {
+    alert(`Ошибка: ${e.message}`);
   }
 };
 
@@ -723,6 +935,8 @@ Object.assign(window, {
   loadSales,
   showSalesDetail,
   createRefund,
+  loadReport,
+  downloadReportCsv,
 });
 
 // ─── Init ───

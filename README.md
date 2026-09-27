@@ -20,13 +20,22 @@
                     │  ├─ logger.js     │  File & console logging
                     │  ├─ polling.js    │  Payment status polling
                     │  ├─ webhookStore  │  Webhook management
+                    │  ├─ app.js        │  Express app factory
+                    │  ├─ middleware/   │  API key, rate limit, session
+                    │  ├─ validation.js │  Amount / phone / id checks
+                    │  ├─ idempotency.js│  Idempotency-Key replay
+                    │  ├─ ledger.js     │  Payments journal & reports
+                    │  ├─ events.js     │  Live payment event bus
                     │  └─ routes/       │  API route handlers
                     │     ├─ auth.js    │  SMS auth (3-step)
                     │     ├─ invoice.js │  Invoice creation
                     │     ├─ qr.js      │  QR code generation
                     │     ├─ history.js │  Transaction history
                     │     ├─ refund.js  │  Refund processing
-                    │     └─ session.js │  Session management
+                    │     ├─ session.js │  Session management
+                    │     ├─ payments.js│  Tracked payments, SSE
+                    │     ├─ reports.js │  Summary, journal, CSV
+                    │     └─ webhooks.js│  Webhook list & test
                     └───────────────────┘
 ```
 
@@ -38,10 +47,22 @@
 
 - 📡 **События:** `payment.success` · `payment.failed` · `payment.expired` · `payment.lost`
 - ⚙️ **Настройка:** файл `webhooks.json` (см. [`webhooks.example.json`](./webhooks.example.json))
-- 🔐 **Подпись:** HMAC SHA-256
-- 🔄 **Retry:** до 3 попыток с нарастающей задержкой
+- 🔐 **Подпись:** HMAC SHA-256 (+ V2 с временной меткой против replay, `X-Webhook-Id` для дедупликации)
+- 🔄 **Retry:** настраиваемое число попыток с нарастающей задержкой; ответ не-2xx тоже считается ошибкой
+- 🧪 **Проверка:** `POST /api/webhooks/test` шлёт тестовое событие на все URL
 
 > 📖 Подробнее — в [документации API](./docs/API.md#webhooks--уведомления).
+
+### Возможности для продакшена
+
+- 🔑 **API-ключ сервера** (`API_KEY`) — закрывает весь `/api/*`, включая SMS-вход.
+- 🚦 **Rate limiting** — отдельный жёсткий лимит на SMS-авторизацию.
+- ♻️ **Идемпотентность** — заголовок `Idempotency-Key` на создание QR, счёта и возврата: повтор после таймаута не создаст второй платёж.
+- ✅ **Валидация** — сумма, телефон (любой формат → 10 цифр), ID операций проверяются до обращения к Kaspi.
+- ⚡ **Живые события (SSE)** — `GET /api/payments/events` вместо опроса статуса каждые 3 секунды.
+- 📊 **Журнал и отчёты** — выручка, средний чек, конверсия, разбивка по дням и типам, экспорт в CSV для Excel.
+- 🖼️ **QR на своём сервере** — `GET /api/qr/image` / `withImage`, ссылка на оплату не уходит в сторонние сервисы.
+- 🛑 **Graceful shutdown** — при `SIGTERM` отслеживаемые платежи и очередь вебхуков сохраняются на диск.
 
 ## Требования
 
@@ -76,6 +97,16 @@ npm start
 | ------------------ | ---------------------------------------- | -------------------------- | ------------ |
 | `TOKEN_SECRET_KEY` | 64-символьная hex-строка для AES-256-GCM | —                          | Да           |
 | `PORT`             | Порт сервера                             | `3000`                     | Нет          |
+| `API_KEY`          | Ключ(и) доступа к `/api/*` через запятую | — (API открыт)             | Рекомендуется |
+| `RATE_LIMIT_PER_MIN` | Лимит запросов к `/api/*` в минуту     | `300`                      | Нет          |
+| `AUTH_RATE_LIMIT_PER_MIN` | Лимит запросов к `/api/auth/*` в минуту | `10`              | Нет          |
+| `TRUST_PROXY`      | Настройка Express `trust proxy` за прокси | —                         | Нет          |
+| `CORS_ORIGINS`     | Разрешённые origin через запятую         | — (CORS выключен)          | Нет          |
+| `MAX_PAYMENT_AMOUNT` | Максимальная сумма одного платежа, ₸   | `10000000`                 | Нет          |
+| `POS_LATITUDE` / `POS_LONGITUDE` | Координаты кассы для QR    | Алматы                     | Нет          |
+| `WEBHOOK_MAX_ATTEMPTS` | Число попыток доставки вебхука       | `3`                        | Нет          |
+| `LEDGER_FILE`      | Путь к журналу платежей                  | `payments-ledger.jsonl`    | Нет          |
+| `REPORT_TZ`        | Часовой пояс для отчётов                 | `Asia/Almaty`              | Нет          |
 | `APP_VERSION`      | Версия приложения Kaspi Pay              | `4.112.1`                  | Нет          |
 | `APP_BUILD`        | Номер сборки                             | `1107`                     | Нет          |
 | `APP_PLATFORM`     | Платформа устройства                     | `iOS`                      | Нет          |
@@ -111,6 +142,8 @@ npm run regen:device    # Перегенерация идентификатор�
 - 📱 **QR-оплата** — генерация QR-кода для оплаты с отслеживанием статуса в реальном времени
 - 📋 **История операций** — просмотр списка транзакций с детализацией
 - 💰 **Продажи и возвраты** — статистика продаж и оформление возвратов
+- 📊 **Отчёт** — выручка, средний чек, конверсия за сегодня / 7 / 30 дней и выгрузка CSV
+- 🔔 **Уведомления в реальном времени** — всплывающие сообщения об оплатах через SSE (зелёная точка у имени — соединение активно)
 
 **Файлы:**
 
