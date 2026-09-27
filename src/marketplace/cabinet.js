@@ -77,9 +77,11 @@ const call = async (jar, method, url, { form, json, headers: extra } = {}) => {
     throw new CabinetError(502, `Кабинет Kaspi недоступен: ${err.message}`);
   }
   console.log(`[cabinet] ${method} ${new URL(url).pathname} → ${resp.status}`);
-  const nextJar = mergeCookies(jar || {}, parseSetCookies(setCookiesFromResponse(resp)));
+  const fresh = parseSetCookies(setCookiesFromResponse(resp));
+  const nextJar = mergeCookies(jar || {}, fresh);
   const data = await readBody(resp);
-  return { status: resp.status, ok: resp.ok, data, jar: nextJar };
+  // cookieNames — только ИМЕНА полученных cookie (не значения), для диагностики
+  return { status: resp.status, ok: resp.ok, data, jar: nextJar, cookieNames: Object.keys(fresh) };
 };
 
 const ensureOk = (r, fallback) => {
@@ -213,7 +215,12 @@ export const login = async (rawLogin, password) => {
   let attempt = null;
   for (const variant of order) {
     const a = await tryLogin(variant, loginId, password);
-    for (const [step, r] of a.steps) diag.push(diagnose(`${variant.label} · ${step}`, r.status, r.data));
+    for (const [step, r] of a.steps) {
+      const label = r.cookieNames?.length
+        ? `${variant.label} · ${step} (cookie: ${r.cookieNames.join(', ')})`
+        : `${variant.label} · ${step}`;
+      diag.push(diagnose(label, r.status, r.data));
+    }
     // Страница защиты от ботов одинакова для любого формата — дальше не перебираем
     if (understood(a.final) || looksBlocked(a.final.status, a.final.data)) {
       attempt = a;
@@ -265,9 +272,79 @@ export const login = async (rawLogin, password) => {
     return { jar: finalJar, merchants };
   } catch (err) {
     if (err instanceof CabinetError && err.status === 401) {
+      // Пароль Kaspi принял (2xx на шаг «пароль»), но список магазинов ещё
+      // закрыт — Kaspi включил двухфакторную защиту и прислал код (по SMS или
+      // на почту). Так и было 27.09.2026: ответ {"email": …} + код. Отдаём
+      // клиенту запечатанный pending, чтобы он прислал его вместе с кодом.
+      throw new CabinetError(409, 'Kaspi отправил код подтверждения. Введите его ниже.', {
+        diag: [...diag, diagnose('магазины', 401, err.body)],
+        needCode: true,
+        pending: { jar, login: loginId, password, at: Date.now() },
+      });
+    }
+    throw err;
+  }
+};
+
+// ─── Второй шаг: код подтверждения (двухфакторная защита) ───
+// Куда Kaspi принимает код, не документировано. По наблюдаемому поведению вход
+// одношаговый и идёт на тот же адрес, поэтому НЕ перебираем адреса (каждая
+// попытка с настоящим кодом приближает блокировку): делаем ОДИН запрос на тот же
+// /api/p/login — логин, пароль и код вместе, код под несколькими именами полей
+// (Spring лишние молча пропускает). Не подошло — честно отправляем в браузер.
+const CODE_TTL_MS = 10 * 60 * 1000;
+
+export const codeFields = (code) => ({
+  code,
+  otp: code,
+  smsCode: code,
+  otpCode: code,
+  verificationCode: code,
+  confirmationCode: code,
+  _c: code,
+});
+
+export const confirmCode = async (pending, rawCode) => {
+  const code = String(rawCode || '').replace(/\D/g, '');
+  if (code.length < 4) throw new CabinetError(400, 'Введите код из SMS или письма (обычно 4–6 цифр)');
+  if (!pending || !pending.jar || !pending.login) {
+    throw new CabinetError(400, 'Сессия входа не найдена — войдите заново.');
+  }
+  if (Date.now() - (pending.at || 0) > CODE_TTL_MS) {
+    throw new CabinetError(408, 'Код устарел — войдите заново, чтобы Kaspi прислал новый.');
+  }
+
+  const loginOrigin = new URL(CABINET_LOGIN_URL).origin;
+  const xsrf = pending.jar['XSRF-TOKEN'] || pending.jar['xsrf-token'];
+  const headers = {
+    Origin: loginOrigin,
+    Referer: `${loginOrigin}/login`,
+    'X-Requested-With': 'XMLHttpRequest',
+    ...(xsrf ? { 'X-XSRF-TOKEN': decodeURIComponent(xsrf) } : {}),
+  };
+  const r = await call(pending.jar, 'POST', CABINET_LOGIN_URL, {
+    headers,
+    json: { ...loginFields(pending.login, pending.password), ...codeFields(code) },
+  });
+  const diag = [diagnose('код', r.status, r.data)];
+  console.log('[cabinet] код:', JSON.stringify(diag));
+
+  if (!r.ok) {
+    throw new CabinetError(
+      r.status === 400 || r.status === 401 || r.status === 403 ? 401 : 502,
+      errorFromBody(r.data, 'Kaspi не принял код. Проверьте цифры или войдите через браузер.'),
+      { diag, needCode: true, pending: { ...pending, at: pending.at } },
+    );
+  }
+
+  try {
+    const { merchants, jar: finalJar } = await getMerchants(r.jar);
+    return { jar: finalJar, merchants };
+  } catch (err) {
+    if (err instanceof CabinetError && err.status === 401) {
       throw new CabinetError(
         401,
-        `Kaspi ответил на пароль, но сессия не открылась. Проверьте ${who} и пароль или войдите через браузер.`,
+        'Код принят, но сессия не открылась. Если Kaspi просит подтверждение ещё раз — войдите через браузер.',
         { diag: [...diag, diagnose('магазины', 401, err.body)] },
       );
     }

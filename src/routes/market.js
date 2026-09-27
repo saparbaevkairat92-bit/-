@@ -23,14 +23,31 @@ const seal = (obj) => encryptSecret(Buffer.from(JSON.stringify(obj), 'utf8'));
 const unseal = (blob) => JSON.parse(decryptSecret(blob).toString('utf8'));
 
 // Ответ Kaspi наружу — только коротким следом (без HTML-простыней и секретов):
-// по нему видно, что именно ответил Kaspi, когда вход не проходит
+// по нему видно, что именно ответил Kaspi, когда вход не проходит.
+// pending (jar + пароль для шага «код») наружу отдаём ТОЛЬКО запечатанным.
 const fail = (res, err) => {
   const status = Number.isInteger(err?.status) && err.status >= 400 && err.status < 600 ? err.status : 500;
   const body = err?.body;
-  let details;
-  if (body && typeof body === 'object' && Array.isArray(body.diag)) details = body;
-  else if (body) details = { diag: [diagnose('ответ', status, body)] };
-  res.status(status).json({ error: err?.message || 'Ошибка', ...(details ? { details } : {}) });
+  const out = { error: err?.message || 'Ошибка' };
+  if (body && typeof body === 'object') {
+    const details = {};
+    if (Array.isArray(body.diag)) details.diag = body.diag;
+    if (body.secondFactor) details.secondFactor = true;
+    if (body.needCode) {
+      details.needCode = true;
+      if (body.pending) out.mcPending = seal(body.pending); // jar/пароль — только зашифрованно
+    }
+    if (Object.keys(details).length) out.details = details;
+  } else if (body) {
+    out.details = { diag: [diagnose('ответ', status, body)] };
+  }
+  res.status(status).json(out);
+};
+
+// Успех входа (по паролю или по коду): один и тот же ответ
+const cabinetOk = (res, req, { jar, merchants }) => {
+  const merchantUid = String(req.body?.merchantUid || '') || merchants[0]?.uid || null;
+  res.json({ success: true, mcSession: seal({ jar, merchantUid, merchants }), merchantUid, merchants });
 };
 
 // ─── Токен API продавца ───
@@ -143,14 +160,23 @@ router.post('/cabinet/login', async (req, res) => {
   const login = String(req.body?.login || req.body?.email || '').trim();
   const password = String(req.body?.password || '');
   try {
-    const { jar, merchants } = await cabinet.login(login, password);
-    const merchantUid = String(req.body?.merchantUid || '') || merchants[0]?.uid || null;
-    res.json({
-      success: true,
-      mcSession: seal({ jar, merchantUid, merchants }),
-      merchantUid,
-      merchants,
-    });
+    cabinetOk(res, req, await cabinet.login(login, password));
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+// Второй шаг двухфакторной защиты: код из SMS/письма. mcPending — запечатанное
+// состояние из ответа /cabinet/login (409 needCode)
+router.post('/cabinet/confirm-code', async (req, res) => {
+  let pending;
+  try {
+    pending = unseal(String(req.body?.mcPending || ''));
+  } catch {
+    return res.status(400).json({ error: 'Сессия входа не найдена — войдите заново.' });
+  }
+  try {
+    cabinetOk(res, req, await cabinet.confirmCode(pending, req.body?.code));
   } catch (err) {
     fail(res, err);
   }
