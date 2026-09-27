@@ -50,8 +50,8 @@ const errorFromBody = (body, fallback) =>
 
 // Запрос к кабинету: подмешивает cookie и забирает обновлённые обратно.
 // Пароль и cookie в лог не пишем — только метод, путь и код ответа.
-const call = async (jar, method, url, { form, json } = {}) => {
-  const headers = baseHeaders(jar);
+const call = async (jar, method, url, { form, json, headers: extra } = {}) => {
+  const headers = { ...baseHeaders(jar), ...(extra || {}) };
   let body;
   if (form) {
     headers['Content-Type'] = 'application/x-www-form-urlencoded';
@@ -99,20 +99,69 @@ export const getMerchants = async (jar) => {
   };
 };
 
-// Попытка войти одним способом кодирования тела (форма или JSON)
-const tryLogin = async (encoding, login, password) => {
+// ─── Как именно отправлять логин и пароль ───
+// Kaspi не документирует вход в кабинет. На неверный формат тела он отвечает
+// 500 Internal Server Error (так было на Railway 27.09.2026 — запрос дошёл,
+// блокировки по IP нет). Поэтому перебираем варианты, как их могла бы слать
+// страница входа, и берём первый, который Kaspi понял. Удачный запоминаем.
+const LOGIN_VARIANTS = [
+  { label: 'форма, 2 шага', encoding: 'form', twoStep: true },
+  { label: 'JSON, 2 шага', encoding: 'json', twoStep: true },
+  { label: 'форма, 1 шаг', encoding: 'form', twoStep: false },
+  { label: 'JSON, 1 шаг', encoding: 'json', twoStep: false },
+];
+let preferredVariant = null;
+
+// Kaspi понял запрос (верный ли логин — уже другой вопрос)
+const understood = (r) => ![500, 404, 405, 415].includes(r.status);
+
+// Открываем страницу входа, как браузер: она ставит cookie сессии и, если есть,
+// защитный XSRF-TOKEN — без них сервер входа может падать
+const primeLogin = async () => {
+  const loginOrigin = new URL(CABINET_LOGIN_URL).origin;
+  const page = `${loginOrigin}/login`;
   let jar = {};
-  const body = (fields) => (encoding === 'json' ? { json: fields } : { form: fields });
-  const step1 = await call(jar, 'POST', CABINET_LOGIN_URL, body({ _u: login }));
-  jar = step1.jar;
-  const step2 = await call(jar, 'POST', CABINET_LOGIN_URL, body({ _u: login, _p: password }));
-  return { step1, step2, jar: step2.jar };
+  try {
+    const r = await call(jar, 'GET', page, { headers: { Accept: 'text/html,application/xhtml+xml' } });
+    jar = r.jar;
+  } catch {
+    // страница не открылась — пробуем войти и без её cookie
+  }
+  const xsrf = jar['XSRF-TOKEN'] || jar['xsrf-token'];
+  return {
+    jar,
+    headers: {
+      Origin: loginOrigin,
+      Referer: page,
+      'X-Requested-With': 'XMLHttpRequest',
+      ...(xsrf ? { 'X-XSRF-TOKEN': decodeURIComponent(xsrf) } : {}),
+    },
+  };
 };
 
-// Вход по телефону (или e-mail сотрудника) и паролю — как веб-форма kaspi.kz/mc:
-// сначала логин, потом пароль. Если Kaspi просит SMS-код или капчу, сервер
-// этого не пройдёт: тогда человек входит в браузере и вставляет cookie
-// (loginWithCookies ниже).
+const tryLogin = async (variant, login, password) => {
+  const primed = await primeLogin();
+  let jar = primed.jar;
+  const send = (fields) =>
+    call(jar, 'POST', CABINET_LOGIN_URL, {
+      headers: primed.headers,
+      ...(variant.encoding === 'json' ? { json: fields } : { form: fields }),
+    });
+  const steps = [];
+  if (variant.twoStep) {
+    const step1 = await send({ _u: login });
+    jar = step1.jar;
+    steps.push(['логин', step1]);
+    if (!understood(step1)) return { variant, steps, final: step1, jar };
+  }
+  const final = await send({ _u: login, _p: password });
+  steps.push(['пароль', final]);
+  return { variant, steps, final, jar: final.jar };
+};
+
+// Вход по телефону (или e-mail сотрудника) и паролю — как веб-форма kaspi.kz/mc.
+// Если Kaspi просит SMS-код или капчу, сервер этого не пройдёт: тогда человек
+// входит в браузере и вставляет cookie (loginWithCookies ниже).
 export const login = async (rawLogin, password) => {
   let loginId;
   try {
@@ -121,37 +170,56 @@ export const login = async (rawLogin, password) => {
     throw new CabinetError(400, err.message);
   }
   if (!password) throw new CabinetError(400, 'Введите пароль кабинета продавца');
+  const who = loginId.kind === 'phone' ? 'номер' : 'e-mail';
 
-  let attempt = await tryLogin('form', loginId.value, password);
-  // Форму не приняли как формат (а не как неверный пароль) — пробуем JSON
-  if ([400, 406, 415].includes(attempt.step2.status) && typeof attempt.step2.data !== 'object') {
-    attempt = await tryLogin('json', loginId.value, password);
+  const order = preferredVariant
+    ? [preferredVariant, ...LOGIN_VARIANTS.filter((v) => v !== preferredVariant)]
+    : LOGIN_VARIANTS;
+  const diag = [];
+  let attempt = null;
+  for (const variant of order) {
+    const a = await tryLogin(variant, loginId.value, password);
+    for (const [step, r] of a.steps) diag.push(diagnose(`${variant.label} · ${step}`, r.status, r.data));
+    // Страница защиты от ботов одинакова для любого формата — дальше не перебираем
+    if (understood(a.final) || looksBlocked(a.final.status, a.final.data)) {
+      attempt = a;
+      break;
+    }
   }
-  const { step1, step2, jar } = attempt;
-  const diag = [diagnose('логин', step1.status, step1.data), diagnose('пароль', step2.status, step2.data)];
   console.log('[cabinet] вход:', JSON.stringify(diag));
 
-  if (looksBlocked(step1.status, step1.data) || looksBlocked(step2.status, step2.data)) {
+  if (!attempt) {
     throw new CabinetError(
       502,
-      `Kaspi не пустил запрос с этого сервера (HTTP ${step2.status}). Сервер должен работать с обычного IP (офис, дом), не из облака. Или воспользуйтесь «Вход через браузер» в карточке кабинета.`,
+      'Сервер входа Kaspi не принял запрос ни в одном известном формате (отвечает 500). Подключитесь через «Вход через браузер» в этой карточке и пришлите разработчику «Ответ Kaspi» ниже.',
+      { diag, secondFactor: true },
+    );
+  }
+  const { final, jar } = attempt;
+  const answers = attempt.steps.map(([, r]) => r);
+
+  if (answers.some((r) => looksBlocked(r.status, r.data))) {
+    throw new CabinetError(
+      502,
+      `Kaspi не пустил запрос с этого сервера (HTTP ${final.status}). Сервер должен работать с обычного IP, не из облака. Или воспользуйтесь «Вход через браузер» в карточке кабинета.`,
       { diag },
     );
   }
-  if (needsSecondFactor(step2.data) || needsSecondFactor(step1.data)) {
+  if (answers.some((r) => needsSecondFactor(r.data))) {
     throw new CabinetError(
       409,
       'Kaspi просит подтвердить вход SMS-кодом. Войдите в kaspi.kz/mc в браузере и вставьте cookie — раздел «Вход через браузер» в карточке кабинета.',
       { diag, secondFactor: true },
     );
   }
-  if (!step2.ok) {
+  if (!final.ok) {
     throw new CabinetError(
-      step2.status === 400 || step2.status === 401 ? 401 : 502,
-      errorFromBody(step2.data, `Kaspi не принял ${loginId.kind === 'phone' ? 'номер' : 'e-mail'} или пароль`),
+      final.status === 400 || final.status === 401 || final.status === 403 ? 401 : 502,
+      errorFromBody(final.data, `Kaspi не принял ${who} или пароль`),
       { diag },
     );
   }
+  preferredVariant = attempt.variant;
 
   try {
     const { merchants, jar: finalJar } = await getMerchants(jar);
@@ -160,8 +228,8 @@ export const login = async (rawLogin, password) => {
     if (err instanceof CabinetError && err.status === 401) {
       throw new CabinetError(
         401,
-        `Kaspi ответил на пароль, но сессия не открылась. Проверьте ${loginId.kind === 'phone' ? 'номер' : 'e-mail'} и пароль или войдите через браузер.`,
-        { diag: [...diag, diagnose('магазин', 401, err.body)] },
+        `Kaspi ответил на пароль, но сессия не открылась. Проверьте ${who} и пароль или войдите через браузер.`,
+        { diag: [...diag, diagnose('магазины', 401, err.body)] },
       );
     }
     throw err;

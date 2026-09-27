@@ -87,10 +87,32 @@ const fakeKaspi = (req, res) => {
   req.on('data', (c) => (raw += c));
   req.on('end', () => {
     seen.push({ path: req.url, cookie: req.headers.cookie || '', body: raw, type: req.headers['content-type'] });
+    if (req.url === '/login') {
+      res.writeHead(200, { 'Content-Type': 'text/html', 'Set-Cookie': 'XSRF-TOKEN=xs%3D1; Path=/' });
+      return res.end('<html>login</html>');
+    }
     if (req.url.startsWith('/api/p/login')) {
       if (mode === 'blocked') {
         res.writeHead(403, { 'Content-Type': 'text/html' });
         return res.end('<html>Access denied</html>');
+      }
+      // Как ответил настоящий Kaspi 27.09.2026 на форму: Spring Boot 500
+      const spring500 = () => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 500, error: 'Internal Server Error', path: '/api/p/login' }));
+      };
+      if (mode === 'all500') return spring500();
+      const isJson = (req.headers['content-type'] || '').includes('json');
+      if (mode === 'jsonOnly') {
+        if (!isJson || req.headers['x-xsrf-token'] !== 'xs=1') return spring500();
+        const j = JSON.parse(raw);
+        if (!j._p) return spring500(); // только один шаг: логин и пароль вместе
+        if (j._u === 'owner@shop.kz' && j._p === 'secret') {
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-session=good; Path=/' });
+          return res.end('{}');
+        }
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ message: 'Неверный логин или пароль' }));
       }
       const form = new URLSearchParams(raw);
       if (!form.get('_p')) {
@@ -188,6 +210,30 @@ describe('POST /api/market/cabinet/login*', () => {
     const r = await post('/api/market/cabinet/login', { login: '7012345678', password: 'secret' });
     assert.equal(r.status, 502);
     assert.match(r.body.error, /обычного IP/);
+  });
+
+  it('form gets Spring 500 → falls through to one-step JSON with XSRF token', async () => {
+    mode = 'jsonOnly';
+    const r = await post('/api/market/cabinet/login', { login: 'Owner@shop.kz', password: 'secret' });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.merchantUid, '30322035');
+    // удачный формат запомнился — следующий вход сразу с него
+    const before = seen.length;
+    const again = await post('/api/market/cabinet/login', { login: 'owner@shop.kz', password: 'secret' });
+    assert.equal(again.status, 200);
+    const loginCalls = seen.slice(before).filter((x) => x.path.startsWith('/api/p/login'));
+    assert.equal(loginCalls.length, 1);
+    assert.match(loginCalls[0].type, /json/);
+  });
+
+  it('every format gets 500 → 502 with a trace of each attempt', async () => {
+    mode = 'all500';
+    const r = await post('/api/market/cabinet/login', { login: 'owner@shop.kz', password: 'secret' });
+    assert.equal(r.status, 502);
+    assert.match(r.body.error, /ни в одном/);
+    assert.equal(r.body.details.secondFactor, true);
+    assert.ok(r.body.details.diag.length >= 4);
+    assert.ok(r.body.details.diag.every((d) => d.status === 500));
   });
 
   it('browser cookies: valid → shops, expired → 401', async () => {
