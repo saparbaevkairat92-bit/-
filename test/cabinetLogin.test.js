@@ -102,31 +102,25 @@ const fakeKaspi = (req, res) => {
         res.end(JSON.stringify({ status: 500, error: 'Internal Server Error', path: '/api/p/login' }));
       };
       if (mode === 'all500') return spring500();
+      // Дальше — как настоящий Kaspi: форма → 500, JSON → вход в один шаг,
+      // без пароля → 401 CREDENTIALS_INVALID
       const isJson = (req.headers['content-type'] || '').includes('json');
-      if (mode === 'jsonOnly') {
-        if (!isJson || req.headers['x-xsrf-token'] !== 'xs=1') return spring500();
-        const j = JSON.parse(raw);
-        if (!j._p) return spring500(); // только один шаг: логин и пароль вместе
-        if (j._u === 'owner@shop.kz' && j._p === 'secret') {
-          res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-session=good; Path=/' });
-          return res.end('{}');
-        }
+      if (!isJson) return spring500();
+      if (req.headers['x-xsrf-token'] !== 'xs=1') return spring500();
+      const j = JSON.parse(raw);
+      // В режиме aliases Kaspi знает поля как username/password, а не _u/_p
+      const user = mode === 'aliases' ? j.username : j._u;
+      const pass = mode === 'aliases' ? j.password : j._p;
+      const invalid = () => {
         res.writeHead(401, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ message: 'Неверный логин или пароль' }));
-      }
-      const form = new URLSearchParams(raw);
-      if (!form.get('_p')) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ next: 'PASSWORD' }));
-      }
+        res.end(JSON.stringify({ errorCode: 'CREDENTIALS_INVALID' }));
+      };
+      if (!pass) return invalid();
       if (mode === 'otp') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ next: 'OTP', message: 'Код отправлен по SMS' }));
       }
-      if (form.get('_u') !== '77012345678' || form.get('_p') !== 'secret') {
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ message: 'Неверный логин или пароль' }));
-      }
+      if (!['77012345678', 'owner@shop.kz'].includes(user) || pass !== 'secret') return invalid();
       res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-session=good; Path=/; HttpOnly' });
       return res.end('{}');
     }
@@ -189,12 +183,19 @@ describe('POST /api/market/cabinet/login*', () => {
     assert.equal(r.status, 200);
   });
 
-  it('wrong password → 401 with what Kaspi said', async () => {
-    const r = await post('/api/market/cabinet/login', { login: '7012345678', password: 'nope' });
+  it('wrong password → one request only, 401 with CREDENTIALS_INVALID explained', async () => {
+    mode = 'ok';
+    const before = seen.length;
+    const r = await post('/api/market/cabinet/login', { login: 'owner@shop.kz', password: 'nope' });
     assert.equal(r.status, 401);
-    assert.match(r.body.error, /Неверный логин или пароль/);
+    assert.match(r.body.error, /неверный логин или пароль/);
+    assert.match(r.body.error, /по номеру телефона/);
     assert.ok(r.body.details.diag.some((d) => d.status === 401));
     assert.ok(!JSON.stringify(r.body).includes('nope'), 'password never echoed');
+    // Каждая неудачная попытка приближает блокировку — шлём ровно одну
+    const logins = seen.slice(before).filter((x) => x.path.startsWith('/api/p/login'));
+    assert.equal(logins.length, 1);
+    assert.match(logins[0].type, /json/);
   });
 
   it('SMS step → 409 pointing to browser login', async () => {
@@ -212,18 +213,18 @@ describe('POST /api/market/cabinet/login*', () => {
     assert.match(r.body.error, /обычного IP/);
   });
 
-  it('form gets Spring 500 → falls through to one-step JSON with XSRF token', async () => {
-    mode = 'jsonOnly';
+  it('one JSON request with XSRF token and field aliases', async () => {
+    mode = 'aliases';
+    const before = seen.length;
     const r = await post('/api/market/cabinet/login', { login: 'Owner@shop.kz', password: 'secret' });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.merchantUid, '30322035');
-    // удачный формат запомнился — следующий вход сразу с него
-    const before = seen.length;
-    const again = await post('/api/market/cabinet/login', { login: 'owner@shop.kz', password: 'secret' });
-    assert.equal(again.status, 200);
-    const loginCalls = seen.slice(before).filter((x) => x.path.startsWith('/api/p/login'));
-    assert.equal(loginCalls.length, 1);
-    assert.match(loginCalls[0].type, /json/);
+    const logins = seen.slice(before).filter((x) => x.path.startsWith('/api/p/login'));
+    assert.equal(logins.length, 1);
+    const sent = JSON.parse(logins[0].body);
+    assert.equal(sent._u, 'owner@shop.kz');
+    assert.equal(sent.username, 'owner@shop.kz');
+    assert.equal(sent.email, 'owner@shop.kz');
   });
 
   it('every format gets 500 → 502 with a trace of each attempt', async () => {

@@ -45,8 +45,18 @@ const readBody = async (resp) => {
   }
 };
 
-const errorFromBody = (body, fallback) =>
-  (body && typeof body === 'object' && (body.message || body.error || body.errorMessage || body.desc)) || fallback;
+// Коды ошибок сервиса входа Kaspi → по-русски
+const KASPI_ERROR_CODES = {
+  CREDENTIALS_INVALID: 'Kaspi: неверный логин или пароль (CREDENTIALS_INVALID)',
+};
+
+const errorFromBody = (body, fallback) => {
+  if (!body || typeof body !== 'object') return fallback;
+  if (body.errorCode && KASPI_ERROR_CODES[body.errorCode]) return KASPI_ERROR_CODES[body.errorCode];
+  return (
+    body.message || body.errorMessage || body.desc || (body.errorCode ? `Kaspi: ${body.errorCode}` : null) || fallback
+  );
+};
 
 // Запрос к кабинету: подмешивает cookie и забирает обновлённые обратно.
 // Пароль и cookie в лог не пишем — только метод, путь и код ответа.
@@ -100,16 +110,34 @@ export const getMerchants = async (jar) => {
 };
 
 // ─── Как именно отправлять логин и пароль ───
-// Kaspi не документирует вход в кабинет. На неверный формат тела он отвечает
-// 500 Internal Server Error (так было на Railway 27.09.2026 — запрос дошёл,
-// блокировки по IP нет). Поэтому перебираем варианты, как их могла бы слать
-// страница входа, и берём первый, который Kaspi понял. Удачный запоминаем.
+// Kaspi не документирует вход в кабинет. Что известно по живым ответам с
+// Railway 27.09.2026:
+//  - форма (x-www-form-urlencoded) → 500 Internal Server Error: формат не тот;
+//  - JSON → 401 {"errorCode":"CREDENTIALS_INVALID"} уже на запрос с одним
+//    логином, то есть вход ОДНОШАГОВЫЙ: логин и пароль в одном JSON.
+// Поэтому первым идёт JSON в один шаг. Как Kaspi называет поля, неизвестно, и
+// каждая лишняя неудачная попытка приближает блокировку аккаунта. Поэтому поля
+// шлём сразу под несколькими именами в ОДНОМ запросе: Spring (сервис входа Kaspi
+// — Spring Boot, судя по формату ошибки) незнакомые поля молча пропускает.
+// Остальные варианты — только если Kaspi не понял сам JSON (500 и т.п.).
 const LOGIN_VARIANTS = [
-  { label: 'форма, 2 шага', encoding: 'form', twoStep: true },
+  { label: 'JSON', encoding: 'json', twoStep: false },
+  { label: 'форма', encoding: 'form', twoStep: false },
   { label: 'JSON, 2 шага', encoding: 'json', twoStep: true },
-  { label: 'форма, 1 шаг', encoding: 'form', twoStep: false },
-  { label: 'JSON, 1 шаг', encoding: 'json', twoStep: false },
+  { label: 'форма, 2 шага', encoding: 'form', twoStep: true },
 ];
+
+// Логин и пароль под всеми правдоподобными именами полей
+export const loginFields = (loginId, password) => {
+  const fields = { _u: loginId.value, username: loginId.value, login: loginId.value };
+  if (loginId.kind === 'email') fields.email = loginId.value;
+  else fields.phone = loginId.value;
+  if (password !== undefined) {
+    fields._p = password;
+    fields.password = password;
+  }
+  return fields;
+};
 let preferredVariant = null;
 
 // Kaspi понял запрос (верный ли логин — уже другой вопрос)
@@ -139,7 +167,7 @@ const primeLogin = async () => {
   };
 };
 
-const tryLogin = async (variant, login, password) => {
+const tryLogin = async (variant, loginId, password) => {
   const primed = await primeLogin();
   let jar = primed.jar;
   const send = (fields) =>
@@ -147,14 +175,20 @@ const tryLogin = async (variant, login, password) => {
       headers: primed.headers,
       ...(variant.encoding === 'json' ? { json: fields } : { form: fields }),
     });
+  // Форме — только исходные _u/_p: как её понимает Kaspi, неизвестно, а лишние
+  // поля в форме могли бы помешать
+  const pick = (withPassword) =>
+    variant.encoding === 'json'
+      ? loginFields(loginId, withPassword ? password : undefined)
+      : { _u: loginId.value, ...(withPassword ? { _p: password } : {}) };
   const steps = [];
   if (variant.twoStep) {
-    const step1 = await send({ _u: login });
+    const step1 = await send(pick(false));
     jar = step1.jar;
     steps.push(['логин', step1]);
     if (!understood(step1)) return { variant, steps, final: step1, jar };
   }
-  const final = await send({ _u: login, _p: password });
+  const final = await send(pick(true));
   steps.push(['пароль', final]);
   return { variant, steps, final, jar: final.jar };
 };
@@ -178,7 +212,7 @@ export const login = async (rawLogin, password) => {
   const diag = [];
   let attempt = null;
   for (const variant of order) {
-    const a = await tryLogin(variant, loginId.value, password);
+    const a = await tryLogin(variant, loginId, password);
     for (const [step, r] of a.steps) diag.push(diagnose(`${variant.label} · ${step}`, r.status, r.data));
     // Страница защиты от ботов одинакова для любого формата — дальше не перебираем
     if (understood(a.final) || looksBlocked(a.final.status, a.final.data)) {
@@ -215,7 +249,12 @@ export const login = async (rawLogin, password) => {
   if (!final.ok) {
     throw new CabinetError(
       final.status === 400 || final.status === 401 || final.status === 403 ? 401 : 502,
-      errorFromBody(final.data, `Kaspi не принял ${who} или пароль`),
+      errorFromBody(final.data, `Kaspi не принял ${who} или пароль`) +
+        (final.data?.errorCode === 'CREDENTIALS_INVALID'
+          ? `. Проверьте, что с этими данными открывается kaspi.kz/mc${
+              loginId.kind === 'email' ? ' (владелец обычно входит по номеру телефона)' : ''
+            }. Не повторяйте много раз подряд — Kaspi может временно заблокировать вход.`
+          : ''),
       { diag },
     );
   }
