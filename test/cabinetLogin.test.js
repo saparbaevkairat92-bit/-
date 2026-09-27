@@ -108,28 +108,41 @@ const fakeKaspi = (req, res) => {
       if (!isJson) return spring500();
       if (req.headers['x-xsrf-token'] !== 'xs=1') return spring500();
       const j = JSON.parse(raw);
-      // В режиме aliases Kaspi знает поля как username/password, а не _u/_p
-      const user = mode === 'aliases' ? j.username : j._u;
-      const pass = mode === 'aliases' ? j.password : j._p;
       const invalid = () => {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ errorCode: 'CREDENTIALS_INVALID' }));
       };
+      // Шаг кода (двухфакторная защита): запрос содержит код и НЕ содержит пароль.
+      // Годен только при живой сессии MFA (cookie mc-preauth/MS_AUTH_SSO).
+      const codeVal = j.code || j.otp || j.smsCode || j.mfaCode;
+      if (codeVal && !j._p && !j.password) {
+        const hasMfa = /mc-preauth=1|MS_AUTH_SSO=/.test(req.headers.cookie || '');
+        if (!hasMfa) return invalid();
+        if (codeVal !== '112233') {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ errorCode: 'MFA_CODE_INVALID' }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-session=good; Path=/; HttpOnly' });
+        return res.end('{}');
+      }
+      // В режиме aliases Kaspi знает поля как username/password, а не _u/_p
+      const user = mode === 'aliases' ? j.username : j._u;
+      const pass = mode === 'aliases' ? j.password : j._p;
       if (!pass) return invalid();
       if (mode === 'otp') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ next: 'OTP', message: 'Код отправлен по SMS' }));
       }
       if (!['77012345678', 'owner@shop.kz'].includes(user) || pass !== 'secret') return invalid();
-      // Двухфакторная защита: пароль принят (200 {"email"}), но сессия ещё не
-      // открыта — Kaspi шлёт код. Сессию даёт только запрос с верным кодом.
+      // Двухфакторная: пароль принят, но код запрашивали слишком часто →
+      // 401 MFA_SEND_FLOOD и cookie сессии MFA (как настоящий Kaspi 28.09.2026)
+      if (mode === 'flood') {
+        res.writeHead(401, { 'Content-Type': 'application/json', 'Set-Cookie': 'MS_AUTH_SSO=x; Path=/; HttpOnly' });
+        return res.end(JSON.stringify({ errorCode: 'MFA_SEND_FLOOD', errorData: { breakTimeSeconds: 122 } }));
+      }
+      // Двухфакторная: пароль принят (200 {"email"}), сессия ещё закрыта, Kaspi
+      // шлёт код; сессию открывает отдельный запрос с кодом (без пароля).
       if (mode === 'twofa') {
-        const codeVal = j.code || j.otp || j.smsCode;
-        if (codeVal) {
-          if (codeVal !== '112233') return invalid();
-          res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-session=good; Path=/; HttpOnly' });
-          return res.end('{}');
-        }
         res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-preauth=1; Path=/; HttpOnly' });
         return res.end(JSON.stringify({ email: user }));
       }
@@ -238,10 +251,29 @@ describe('POST /api/market/cabinet/login*', () => {
     const wrong = await post('/api/market/cabinet/confirm-code', { mcPending: r.body.mcPending, code: '000000' });
     assert.equal(wrong.status, 401);
 
+    // confirm шлёт ТОЛЬКО код (без пароля), чтобы не спровоцировать новую отправку
+    const before = seen.length;
     const ok = await post('/api/market/cabinet/confirm-code', { mcPending: r.body.mcPending, code: '11-22-33' });
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     assert.equal(ok.body.merchantUid, '30322035');
     assert.ok(ok.body.mcSession);
+    const confirmReq = seen.slice(before).find((x) => x.path.startsWith('/api/p/login'));
+    const sent = JSON.parse(confirmReq.body);
+    assert.ok(!sent._p && !sent.password, 'password NOT resent on code step');
+  });
+
+  it('MFA_SEND_FLOOD: password accepted, code rate-limited → 409 needCode + wait, code still works', async () => {
+    mode = 'flood';
+    const r = await post('/api/market/cabinet/login', { login: 'owner@shop.kz', password: 'secret' });
+    assert.equal(r.status, 409);
+    assert.equal(r.body.details.needCode, true);
+    assert.equal(r.body.details.waitSeconds, 122);
+    assert.match(r.body.error, /ограничил отправку кода/);
+    assert.ok(r.body.mcPending);
+    // Код, присланный раньше, всё равно открывает сессию (session MFA жива)
+    const ok = await post('/api/market/cabinet/confirm-code', { mcPending: r.body.mcPending, code: '112233' });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal(ok.body.merchantUid, '30322035');
   });
 
   it('confirm-code rejects a garbage pending token', async () => {

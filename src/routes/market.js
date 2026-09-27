@@ -35,7 +35,8 @@ const fail = (res, err) => {
     if (body.secondFactor) details.secondFactor = true;
     if (body.needCode) {
       details.needCode = true;
-      if (body.pending) out.mcPending = seal(body.pending); // jar/пароль — только зашифрованно
+      if (body.waitSeconds) details.waitSeconds = body.waitSeconds;
+      if (body.pending) out.mcPending = seal(body.pending); // jar сессии MFA — только зашифрованно
     }
     if (Object.keys(details).length) out.details = details;
   } else if (body) {
