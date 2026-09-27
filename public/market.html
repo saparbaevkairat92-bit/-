@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kaspi Маркетплейс</title>
+    <link rel="stylesheet" href="style.css" />
+    <style>
+      /* .conn и .row задают display — .hidden должен перебивать их */
+      .hidden {
+        display: none !important;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .row > * {
+        flex: 1;
+      }
+      .muted {
+        font-size: 13px;
+        color: #888;
+      }
+      .conn {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+      }
+      .conn .btn {
+        width: auto;
+        margin: 0;
+        padding: 8px 14px;
+        font-size: 13px;
+      }
+      .point {
+        border: 1px solid #eee;
+        border-radius: 10px;
+        padding: 8px 12px;
+        margin-top: 8px;
+      }
+      .point label {
+        margin-top: 6px;
+      }
+      .ours {
+        background: #fff8e1;
+      }
+      pre.code {
+        background: #f5f5f5;
+        border-radius: 10px;
+        padding: 12px;
+        font-size: 12px;
+        overflow-x: auto;
+        white-space: pre;
+        margin-top: 8px;
+      }
+      .tab {
+        font-size: 13px;
+        padding: 10px 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🛒 Kaspi Маркетплейс</h1>
+      <button class="link-btn" style="margin: 0 0 12px" onclick="location.href = 'index.html'">
+        ← Сменить режим (Kaspi Pay)
+      </button>
+
+      <!-- ═══ ПОДКЛЮЧЕНИЕ ═══ -->
+      <div class="card">
+        <h2>1. Токен API продавца</h2>
+        <p class="muted">Заказы, принятие, накладные. Кабинет продавца → Настройки → Токен API.</p>
+        <div id="tokenForm">
+          <label>Токен API</label>
+          <input type="password" id="tokenInput" autocomplete="off" placeholder="X-Auth-Token" />
+          <label>Номер магазина (merchant UID)</label>
+          <input type="text" id="merchantUidInput" inputmode="numeric" placeholder="например 30322035" />
+          <button class="btn btn-primary" id="btnConnect" onclick="connectToken()">Подключить</button>
+        </div>
+        <div id="tokenState" class="conn hidden">
+          <div><b>Подключён</b> <span class="muted" id="tokenInfo"></span></div>
+          <button class="btn btn-secondary" onclick="disconnectToken()">Отключить</button>
+        </div>
+        <div id="tokenMsg" class="hidden" style="margin-top: 12px"></div>
+      </div>
+
+      <div class="card">
+        <h2>2. Кабинет продавца</h2>
+        <p class="muted">
+          То, чего нет в API по токену: список товаров с ценами и остатками, изменение цены, наличия и предзаказа. Вход
+          логином и паролем кабинета kaspi.kz/mc.
+        </p>
+        <div id="cabinetForm">
+          <label>Логин (e-mail)</label>
+          <input type="email" id="mcEmail" autocomplete="username" />
+          <label>Пароль</label>
+          <input type="password" id="mcPassword" autocomplete="current-password" />
+          <button class="btn btn-primary" id="btnMcLogin" onclick="cabinetLogin()">Войти в кабинет</button>
+        </div>
+        <div id="cabinetState" class="hidden">
+          <div class="conn">
+            <div><b>Кабинет подключён</b></div>
+            <button class="btn btn-secondary" onclick="cabinetLogout()">Выйти</button>
+          </div>
+          <label>Магазин</label>
+          <select id="merchantSelect" onchange="selectMerchant()"></select>
+        </div>
+        <div id="cabinetMsg" class="hidden" style="margin-top: 12px"></div>
+      </div>
+
+      <!-- ═══ РАЗДЕЛЫ ═══ -->
+      <div class="tabs">
+        <button class="tab active" id="tabOrders" onclick="switchTab('orders')">Заказы</button>
+        <button class="tab" id="tabOffers" onclick="switchTab('offers')">Товары</button>
+        <button class="tab" id="tabCompetitors" onclick="switchTab('competitors')">Конкуренты</button>
+        <button class="tab" id="tabWms" onclick="switchTab('wms')">NS WMS</button>
+      </div>
+
+      <!-- Заказы -->
+      <div id="ordersTab">
+        <div class="card">
+          <h2>Заказы за 14 дней</h2>
+          <div class="row">
+            <select id="orderState">
+              <option value="NEW">Новые</option>
+              <option value="SIGN_REQUIRED">Нужна подпись</option>
+              <option value="KASPI_DELIVERY">Kaspi Доставка</option>
+              <option value="DELIVERY">Своя доставка</option>
+              <option value="PICKUP">Самовывоз</option>
+              <option value="ARCHIVE">Архив</option>
+            </select>
+            <button class="btn btn-secondary" style="margin: 0" onclick="loadOrders()">Показать</button>
+          </div>
+          <div class="row" style="margin-top: 8px">
+            <input type="text" id="orderCode" placeholder="Номер заказа" inputmode="numeric" />
+            <button class="btn btn-secondary" style="margin: 0" onclick="findOrder()">Найти</button>
+          </div>
+          <div id="ordersList" style="margin-top: 12px">
+            <p class="muted" style="text-align: center">Подключите токен и нажмите «Показать»</p>
+          </div>
+        </div>
+        <div id="orderDetail" class="hidden">
+          <div class="card">
+            <h2>Заказ <span id="orderDetailCode"></span></h2>
+            <div id="orderDetailContent"></div>
+            <div id="orderActions"></div>
+            <div id="orderMsg" class="hidden" style="margin-top: 8px"></div>
+            <button class="btn btn-secondary" onclick="$('orderDetail').classList.add('hidden')">Закрыть</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Товары -->
+      <div id="offersTab" class="hidden">
+        <div class="card">
+          <h2>Товары магазина</h2>
+          <div class="row">
+            <input type="text" id="offerQuery" placeholder="Название или артикул" />
+            <button class="btn btn-secondary" style="margin: 0" onclick="loadOffers(0)">Найти</button>
+          </div>
+          <div id="offersList" style="margin-top: 12px">
+            <p class="muted" style="text-align: center">Войдите в кабинет продавца</p>
+          </div>
+          <div class="row" id="offersPager" style="margin-top: 8px"></div>
+        </div>
+        <div id="offerEdit" class="hidden">
+          <div class="card">
+            <h2 id="offerEditTitle">Товар</h2>
+            <p class="muted" id="offerEditSku"></p>
+            <label>Цена (₸)</label>
+            <input type="number" id="offerPrice" min="1" inputmode="numeric" />
+            <div id="offerPoints"></div>
+            <button class="btn btn-primary" id="btnSaveOffer" onclick="saveOffer()">Сохранить в Kaspi</button>
+            <div id="offerMsg" class="hidden" style="margin-top: 8px"></div>
+            <button class="btn btn-secondary" onclick="$('offerEdit').classList.add('hidden')">Закрыть</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Конкуренты -->
+      <div id="competitorsTab" class="hidden">
+        <div class="card">
+          <h2>Конкуренты на карточке</h2>
+          <p class="muted">
+            Номер карточки — из ссылки kaspi.kz/shop/p/…-<b>123456789</b>/ или из позиции заказа. Витрина Kaspi
+            блокирует облачные серверы — работает, когда сервер запущен с обычного IP.
+          </p>
+          <div class="row" style="margin-top: 8px">
+            <input type="text" id="cardId" placeholder="Номер карточки" inputmode="numeric" />
+            <button class="btn btn-secondary" style="margin: 0" onclick="loadCompetitors()">Проверить</button>
+          </div>
+          <div id="competitorsList" style="margin-top: 12px"></div>
+        </div>
+      </div>
+
+      <!-- NS WMS -->
+      <div id="wmsTab" class="hidden">
+        <div class="card">
+          <h2>Подключение к NS WMS</h2>
+          <p class="muted">
+            NS WMS ходит в этот сервер так же, как за Kaspi QR. Адрес сервера — в переменной
+            <code>KASPI_BRIDGE_URL</code> на стороне WMS.
+          </p>
+          <label>Адрес сервера</label>
+          <pre class="code" id="wmsBase"></pre>
+          <label>Что доступно сейчас</label>
+          <div id="wmsCaps"></div>
+          <label>Вызовы</label>
+          <pre class="code">
+POST /api/market/connect          {token, merchantUid} → marketToken
+POST /api/market/cabinet/login    {email, password}    → mcSession, merchants
+GET  /api/market/capabilities
+
+GET  /api/market/orders?state=NEW&amp;days=14
+GET  /api/market/orders/by-code/{code}
+GET  /api/market/orders/{id}
+POST /api/market/orders/{id}/accept
+POST /api/market/orders/{id}/assemble   {numberOfSpace}
+GET  /api/market/orders/{id}/waybill    → PDF
+
+GET  /api/market/offers?q=&amp;page=0&amp;limit=50
+POST /api/market/offers/update     {sku, price?, points?[{storeId, available, stockCount, preorder}]}
+GET  /api/market/cards/{cardId}/competitors
+
+Заголовки:
+  X-Kaspi-Token + X-Merchant-Uid   — токен API как есть (или X-Market-Token из /connect)
+  X-Mc-Session                      — сессия кабинета; сервер присылает обновлённую
+                                      в ответном заголовке X-Mc-Session — сохраняйте её</pre
+          >
+          <p class="muted" style="margin-top: 8px">Подробно — docs/MARKETPLACE.md в репозитории.</p>
+        </div>
+      </div>
+    </div>
+
+    <script src="market.js"></script>
+  </body>
+</html>
