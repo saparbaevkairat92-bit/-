@@ -89,15 +89,40 @@
       <div class="card">
         <h2>2. Кабинет продавца</h2>
         <p class="muted">
-          То, чего нет в API по токену: список товаров с ценами и остатками, изменение цены, наличия и предзаказа. Вход
-          логином и паролем кабинета kaspi.kz/mc.
+          То, чего нет в API по токену: список товаров с ценами и остатками, изменение цены, наличия и предзаказа.
         </p>
         <div id="cabinetForm">
-          <label>Логин (e-mail)</label>
-          <input type="email" id="mcEmail" autocomplete="username" />
+          <label>Телефон или e-mail</label>
+          <input type="text" id="mcLogin" autocomplete="username" placeholder="+7 701 234 56 78" />
+          <p class="muted" style="margin-top: 4px">Владелец входит по номеру телефона, сотрудник — по e-mail.</p>
           <label>Пароль</label>
           <input type="password" id="mcPassword" autocomplete="current-password" />
           <button class="btn btn-primary" id="btnMcLogin" onclick="cabinetLogin()">Войти в кабинет</button>
+
+          <details id="cookieLogin" style="margin-top: 16px">
+            <summary style="cursor: pointer; font-weight: 600">Не входит или просит SMS? Вход через браузер</summary>
+            <ol class="muted" style="margin: 8px 0 0 18px; line-height: 1.6">
+              <li>На компьютере откройте <b>kaspi.kz/mc</b> в Chrome и войдите как обычно (с SMS-кодом).</li>
+              <li>Нажмите <b>F12</b> → вкладка <b>Network</b> → обновите страницу (F5).</li>
+              <li>Выберите любой запрос к <b>mc.shop.kaspi.kz</b> → <b>Headers</b> → <b>Request Headers</b>.</li>
+              <li>Скопируйте всё значение строки <b>Cookie</b> и вставьте ниже.</li>
+            </ol>
+            <label>Cookie из браузера</label>
+            <textarea
+              id="mcCookies"
+              rows="4"
+              style="width: 100%; font-family: monospace; font-size: 12px"
+              placeholder="mc-session=…; mc-sid=…"
+            ></textarea>
+            <label>Номер магазина (merchant UID)</label>
+            <input type="text" id="mcMerchantUid" inputmode="numeric" placeholder="например 30322035" />
+            <button class="btn btn-secondary" id="btnMcCookies" onclick="cabinetCookieLogin()">
+              Подключить кабинет
+            </button>
+            <p class="muted" style="margin-top: 6px">
+              Cookie дают доступ к кабинету — вставляйте только сюда. Сервер хранит их зашифрованными, у вас в браузере.
+            </p>
+          </details>
         </div>
         <div id="cabinetState" class="hidden">
           <div class="conn">

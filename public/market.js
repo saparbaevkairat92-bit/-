@@ -71,8 +71,22 @@ const api = async (path, opts = {}) => {
     setState({ mcSession: null });
     renderConnections();
   }
-  if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
+  if (!resp.ok) {
+    const err = new Error(body.error || `HTTP ${resp.status}`);
+    err.details = body.details || null;
+    throw err;
+  }
   return body;
+};
+
+// Ошибка входа + коротко, что ответил Kaspi: по скриншоту видно причину
+const showLoginError = (e) => {
+  const diag = e.details?.diag || [];
+  const trace = diag.map((d) => `${d.step}: HTTP ${d.status}${d.snippet ? ` — ${d.snippet}` : ''}`).join('\n');
+  showMsg('cabinetMsg', trace ? `${e.message}\n\nОтвет Kaspi:\n${trace}` : e.message, 'err');
+  $('cabinetMsg').style.whiteSpace = 'pre-wrap';
+  $('cabinetMsg').style.textAlign = 'left';
+  if (e.details?.secondFactor) $('cookieLogin').open = true;
 };
 
 const post = (path, body) =>
@@ -122,20 +136,40 @@ const disconnectToken = () => {
 };
 
 const cabinetLogin = async () => {
-  const email = $('mcEmail').value.trim();
+  const login = $('mcLogin').value.trim();
   const password = $('mcPassword').value;
-  if (!email || !password) return showMsg('cabinetMsg', 'Введите логин и пароль', 'err');
+  if (!login || !password) return showMsg('cabinetMsg', 'Введите телефон (или e-mail) и пароль', 'err');
   const btn = $('btnMcLogin');
   btn.disabled = true;
   showMsg('cabinetMsg', 'Входим в кабинет Kaspi…', 'info');
   try {
-    const r = await post('/api/market/cabinet/login', { email, password });
+    const r = await post('/api/market/cabinet/login', { login, password });
     setState({ mcSession: r.mcSession, merchants: r.merchants, merchantUid: r.merchantUid });
     $('mcPassword').value = '';
     showMsg('cabinetMsg', '', '');
     renderConnections();
   } catch (e) {
-    showMsg('cabinetMsg', e.message, 'err');
+    showLoginError(e);
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+const cabinetCookieLogin = async () => {
+  const cookies = $('mcCookies').value.trim();
+  const merchantUid = $('mcMerchantUid').value.trim();
+  if (!cookies) return showMsg('cabinetMsg', 'Вставьте cookie из браузера', 'err');
+  const btn = $('btnMcCookies');
+  btn.disabled = true;
+  showMsg('cabinetMsg', 'Проверяем сессию кабинета…', 'info');
+  try {
+    const r = await post('/api/market/cabinet/login-cookies', { cookies, merchantUid });
+    setState({ mcSession: r.mcSession, merchants: r.merchants, merchantUid: r.merchantUid });
+    $('mcCookies').value = '';
+    showMsg('cabinetMsg', r.verified ? '' : 'Подключено. Проверим на списке товаров — откройте «Товары».', 'info');
+    renderConnections();
+  } catch (e) {
+    showLoginError(e);
   } finally {
     btn.disabled = false;
   }
