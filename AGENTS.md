@@ -11,7 +11,8 @@
 
 - **Entry point**: `server.js` — Express, routes under `/api/*`, static `public/`.
 - **Source**: `src/config.js`, `src/crypto.js`, `src/helpers.js`, `src/session.js`.
-- **Routes**: `src/routes/{auth,invoice,qr,history,refund}.js`.
+- **Routes**: `src/routes/{auth,invoice,qr,history,refund,session,market}.js`.
+- **Two modes**: `/` asks Kaspi Pay or Marketplace. Marketplace UI is `public/market.html`, API `/api/market/*`, logic in `src/marketplace/` — see `docs/MARKETPLACE.md`.
 - **Stateless after auth** — temp in-memory `Map` only during 3-step SMS flow; after that, session data lives on the client side (encrypted headers).
 
 ## Code Style

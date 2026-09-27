@@ -58,3 +58,11 @@ WMS переводит статусы Kaspi в свои состояния та�
 `src/polling.js`: `Processed → paid`; отмены/отказы/блокировки → `failed`;
 `Expired`/`QrTokenDiscarded → expired`; промежуточные (`QrTokenCreated`,
 `Wait`, `QrTokenScanned`, `PaymentConfirmation`) — платёж ещё открыт.
+
+## Маркетплейс (заказы, товары, цены)
+
+Тот же сервер (тот же `KASPI_BRIDGE_URL`) отдаёт и функции магазина на Kaspi —
+`/api/market/*`. Заказы работают по токену, который у WMS уже есть
+(`X-Kaspi-Token` + `X-Merchant-Uid`). Товары, цены, остатки и предзаказ — через вход в
+кабинет продавца (`X-Mc-Session`): этого через токен получить нельзя. Подробно —
+[MARKETPLACE.md](./MARKETPLACE.md#интеграция-с-ns-wms).

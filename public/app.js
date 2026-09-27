@@ -109,10 +109,33 @@ const attachPhoneFormatter = (el) => {
   });
 };
 
-window.addEventListener('DOMContentLoaded', () => {
-  tryRestoreSession();
+// ─── Выбор режима: Kaspi Pay или Маркетплейс ───
+
+const showModeScreen = () => {
+  $('authScreen').classList.add('hidden');
+  $('mainScreen').classList.add('hidden');
+  $('modeScreen').classList.remove('hidden');
+};
+
+const chooseMode = (mode) => {
+  if (mode === 'market') {
+    window.location.href = 'market.html';
+    return;
+  }
+  $('modeScreen').classList.add('hidden');
+  $('authScreen').classList.remove('hidden');
+  setAuthStep(1);
+};
+
+window.addEventListener('DOMContentLoaded', async () => {
   attachPhoneFormatter($('phoneInput'));
   attachPhoneFormatter($('clientPhone'));
+  const restored = await tryRestoreSession();
+  // Нет сессии кассира — спрашиваем, куда входим. Ссылка index.html#pay ведёт сразу в Kaspi Pay.
+  if (!restored && $('authScreen').classList.contains('hidden')) {
+    if (window.location.hash === '#pay') chooseMode('pay');
+    else showModeScreen();
+  }
 });
 
 // ─── Auth UI Helpers ───
