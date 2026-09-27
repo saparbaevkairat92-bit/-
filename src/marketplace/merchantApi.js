@@ -24,7 +24,12 @@ export class MerchantApiError extends Error {
   }
 }
 
+// body === null — ответ не JSON (страница защиты, прокси хостинга). Такой 403 —
+// это не «неверный токен», а блокировка адреса сервера
 const friendly = (status, body) => {
+  if (status === 403 && body === null) {
+    return 'Запрос к Kaspi заблокирован по пути (HTTP 403 без ответа API): сеть сервера не пускает к kaspi.kz.';
+  }
   if (status === 401 || status === 403) return 'Kaspi не принял токен API. Проверьте токен в кабинете продавца.';
   if (status === 429) return 'Слишком много запросов к Kaspi (429). Подождите минуту.';
   const msg = body?.errors?.[0]?.detail || body?.errors?.[0]?.title || body?.message;
@@ -135,7 +140,7 @@ export const downloadWaybill = async (auth, waybillUrl) => {
     throw new MerchantApiError(400, 'Ссылка на накладную ведёт не на kaspi.kz');
   }
   const resp = await fetch(url, { headers: { ...authHeaders(auth), Accept: 'application/pdf' } });
-  if (!resp.ok) throw new MerchantApiError(resp.status, friendly(resp.status, null));
+  if (!resp.ok) throw new MerchantApiError(resp.status, friendly(resp.status, resp.status === 403 ? null : {}));
   return resp;
 };
 

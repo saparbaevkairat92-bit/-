@@ -4,6 +4,7 @@ import * as merchantApi from '../marketplace/merchantApi.js';
 import * as cabinet from '../marketplace/cabinet.js';
 import { cardCompetitors } from '../marketplace/catalog.js';
 import { normalizeOrder, normalizeEntry, normalizeOffer } from '../marketplace/normalize.js';
+import { diagnose } from '../marketplace/loginHelpers.js';
 
 // ═══════════════════════════════════════════════════
 //  Kaspi Маркетплейс — /api/market/*
@@ -21,9 +22,15 @@ const router = Router();
 const seal = (obj) => encryptSecret(Buffer.from(JSON.stringify(obj), 'utf8'));
 const unseal = (blob) => JSON.parse(decryptSecret(blob).toString('utf8'));
 
+// Ответ Kaspi наружу — только коротким следом (без HTML-простыней и секретов):
+// по нему видно, что именно ответил Kaspi, когда вход не проходит
 const fail = (res, err) => {
   const status = Number.isInteger(err?.status) && err.status >= 400 && err.status < 600 ? err.status : 500;
-  res.status(status).json({ error: err?.message || 'Ошибка', ...(err?.body ? { details: err.body } : {}) });
+  const body = err?.body;
+  let details;
+  if (body && typeof body === 'object' && Array.isArray(body.diag)) details = body;
+  else if (body) details = { diag: [diagnose('ответ', status, body)] };
+  res.status(status).json({ error: err?.message || 'Ошибка', ...(details ? { details } : {}) });
 };
 
 // ─── Токен API продавца ───
@@ -130,11 +137,13 @@ router.post('/connect', async (req, res) => {
 
 // ═══ Кабинет продавца: вход ═══
 
+// Вход по телефону (или e-mail сотрудника) и паролю. Поле `login`; `email`
+// оставлено для старых клиентов
 router.post('/cabinet/login', async (req, res) => {
-  const email = String(req.body?.email || '').trim();
+  const login = String(req.body?.login || req.body?.email || '').trim();
   const password = String(req.body?.password || '');
   try {
-    const { jar, merchants } = await cabinet.login(email, password);
+    const { jar, merchants } = await cabinet.login(login, password);
     const merchantUid = String(req.body?.merchantUid || '') || merchants[0]?.uid || null;
     res.json({
       success: true,
@@ -142,6 +151,18 @@ router.post('/cabinet/login', async (req, res) => {
       merchantUid,
       merchants,
     });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+// Вход через браузер: cookie сессии kaspi.kz/mc, где человек уже вошёл (с SMS)
+router.post('/cabinet/login-cookies', async (req, res) => {
+  const requestedUid = String(req.body?.merchantUid || '').trim() || null;
+  try {
+    const { jar, merchants, verified } = await cabinet.loginWithCookies(req.body?.cookies, requestedUid);
+    const merchantUid = requestedUid || merchants[0]?.uid || null;
+    res.json({ success: true, verified, mcSession: seal({ jar, merchantUid, merchants }), merchantUid, merchants });
   } catch (err) {
     fail(res, err);
   }
