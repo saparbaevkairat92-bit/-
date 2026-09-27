@@ -99,6 +99,12 @@
           <input type="password" id="mcPassword" autocomplete="current-password" />
           <button class="btn btn-primary" id="btnMcLogin" onclick="cabinetLogin()">Войти в кабинет</button>
 
+          <div id="codeStep" class="hidden" style="margin-top: 12px">
+            <label>Код подтверждения из SMS или письма</label>
+            <input type="tel" id="mcCode" inputmode="numeric" autocomplete="one-time-code" placeholder="4–6 цифр" />
+            <button class="btn btn-primary" id="btnMcCode" onclick="cabinetConfirmCode()">Подтвердить код</button>
+          </div>
+
           <details id="cookieLogin" style="margin-top: 16px">
             <summary style="cursor: pointer; font-weight: 600">Не входит или просит SMS? Вход через браузер</summary>
             <ol class="muted" style="margin: 8px 0 0 18px; line-height: 1.6">

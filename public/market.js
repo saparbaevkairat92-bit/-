@@ -74,13 +74,23 @@ const api = async (path, opts = {}) => {
   if (!resp.ok) {
     const err = new Error(body.error || `HTTP ${resp.status}`);
     err.details = body.details || null;
+    err.mcPending = body.mcPending || null;
     throw err;
   }
   return body;
 };
 
-// Ошибка входа + коротко, что ответил Kaspi: по скриншоту видно причину
+// Ошибка входа + коротко, что ответил Kaspi: по скриншоту видно причину.
+// needCode → показываем поле для кода подтверждения, а не «ошибку».
 const showLoginError = (e) => {
+  if (e.details?.needCode && e.mcPending) {
+    setState({ mcPending: e.mcPending });
+    $('codeStep').classList.remove('hidden');
+    $('mcCode').focus();
+    showMsg('cabinetMsg', e.message, 'info');
+    $('cabinetMsg').style.whiteSpace = 'pre-wrap';
+    return;
+  }
   const diag = e.details?.diag || [];
   const trace = diag.map((d) => `${d.step}: HTTP ${d.status}${d.snippet ? ` — ${d.snippet}` : ''}`).join('\n');
   showMsg('cabinetMsg', trace ? `${e.message}\n\nОтвет Kaspi:\n${trace}` : e.message, 'err');
@@ -144,11 +154,38 @@ const cabinetLogin = async () => {
   showMsg('cabinetMsg', 'Входим в кабинет Kaspi…', 'info');
   try {
     const r = await post('/api/market/cabinet/login', { login, password });
-    setState({ mcSession: r.mcSession, merchants: r.merchants, merchantUid: r.merchantUid });
+    setState({ mcSession: r.mcSession, merchants: r.merchants, merchantUid: r.merchantUid, mcPending: null });
     $('mcPassword').value = '';
+    $('codeStep').classList.add('hidden');
     showMsg('cabinetMsg', '', '');
     renderConnections();
   } catch (e) {
+    showLoginError(e);
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+// Второй шаг: код подтверждения (двухфакторная защита Kaspi)
+const cabinetConfirmCode = async () => {
+  const code = $('mcCode').value.trim();
+  const mcPending = getState().mcPending;
+  if (!code) return showMsg('cabinetMsg', 'Введите код из SMS или письма', 'err');
+  if (!mcPending) return showMsg('cabinetMsg', 'Сессия входа устарела — войдите заново', 'err');
+  const btn = $('btnMcCode');
+  btn.disabled = true;
+  showMsg('cabinetMsg', 'Проверяем код…', 'info');
+  try {
+    const r = await post('/api/market/cabinet/confirm-code', { code, mcPending });
+    setState({ mcSession: r.mcSession, merchants: r.merchants, merchantUid: r.merchantUid, mcPending: null });
+    $('mcCode').value = '';
+    $('mcPassword').value = '';
+    $('codeStep').classList.add('hidden');
+    showMsg('cabinetMsg', '', '');
+    renderConnections();
+  } catch (e) {
+    // Неверный код — Kaspi мог прислать новое состояние; обновим, если пришло
+    if (e.mcPending) setState({ mcPending: e.mcPending });
     showLoginError(e);
   } finally {
     btn.disabled = false;
@@ -176,7 +213,8 @@ const cabinetCookieLogin = async () => {
 };
 
 const cabinetLogout = () => {
-  setState({ mcSession: null, merchants: null, merchantUid: null });
+  setState({ mcSession: null, merchants: null, merchantUid: null, mcPending: null });
+  $('codeStep').classList.add('hidden');
   renderConnections();
 };
 

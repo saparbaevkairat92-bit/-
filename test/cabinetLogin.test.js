@@ -121,6 +121,18 @@ const fakeKaspi = (req, res) => {
         return res.end(JSON.stringify({ next: 'OTP', message: 'Код отправлен по SMS' }));
       }
       if (!['77012345678', 'owner@shop.kz'].includes(user) || pass !== 'secret') return invalid();
+      // Двухфакторная защита: пароль принят (200 {"email"}), но сессия ещё не
+      // открыта — Kaspi шлёт код. Сессию даёт только запрос с верным кодом.
+      if (mode === 'twofa') {
+        const codeVal = j.code || j.otp || j.smsCode;
+        if (codeVal) {
+          if (codeVal !== '112233') return invalid();
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-session=good; Path=/; HttpOnly' });
+          return res.end('{}');
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-preauth=1; Path=/; HttpOnly' });
+        return res.end(JSON.stringify({ email: user }));
+      }
       res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-session=good; Path=/; HttpOnly' });
       return res.end('{}');
     }
@@ -211,6 +223,30 @@ describe('POST /api/market/cabinet/login*', () => {
     const r = await post('/api/market/cabinet/login', { login: '7012345678', password: 'secret' });
     assert.equal(r.status, 502);
     assert.match(r.body.error, /обычного IP/);
+  });
+
+  it('two-factor: password accepted → 409 needCode with sealed pending, code opens session', async () => {
+    mode = 'twofa';
+    const r = await post('/api/market/cabinet/login', { login: 'owner@shop.kz', password: 'secret' });
+    assert.equal(r.status, 409);
+    assert.equal(r.body.details.needCode, true);
+    assert.ok(r.body.mcPending, 'sealed pending returned');
+    // pending запечатан: пароль не виден, а сам токен непрозрачен (не JSON)
+    assert.ok(!JSON.stringify(r.body).includes('secret'), 'password never exposed');
+    assert.throws(() => JSON.parse(Buffer.from(r.body.mcPending, 'base64').toString('utf8')), 'pending is opaque');
+
+    const wrong = await post('/api/market/cabinet/confirm-code', { mcPending: r.body.mcPending, code: '000000' });
+    assert.equal(wrong.status, 401);
+
+    const ok = await post('/api/market/cabinet/confirm-code', { mcPending: r.body.mcPending, code: '11-22-33' });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal(ok.body.merchantUid, '30322035');
+    assert.ok(ok.body.mcSession);
+  });
+
+  it('confirm-code rejects a garbage pending token', async () => {
+    const r = await post('/api/market/cabinet/confirm-code', { mcPending: 'not-a-token', code: '112233' });
+    assert.equal(r.status, 400);
   });
 
   it('one JSON request with XSRF token and field aliases', async () => {
