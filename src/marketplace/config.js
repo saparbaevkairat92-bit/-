@@ -18,6 +18,12 @@ export const MERCHANT_API_URL = process.env.KASPI_MERCHANT_API_URL || 'https://k
 export const CABINET_LOGIN_URL = process.env.KASPI_MC_LOGIN_URL || 'https://idmc.shop.kaspi.kz/api/p/login';
 export const CABINET_URL = process.env.KASPI_MC_URL || 'https://mc.shop.kaspi.kz';
 
+// Вход в кабинет = OAuth2 (Authorization Code + PKCE): цепочка редиректов
+// mc.shop.kaspi.kz/oauth2/authorization/1 приводит на idmc и ставит cookie
+// сессии. Точка входа и адрес возврата — из этой пары (переопределяемы для тестов).
+export const CABINET_OAUTH_URL = process.env.KASPI_MC_OAUTH_URL || `${CABINET_URL}/oauth2/authorization/1`;
+export const CABINET_HOME_URL = process.env.KASPI_MC_HOME_URL || 'https://kaspi.kz/mc/';
+
 export const PUBLIC_OFFERS_URL = 'https://kaspi.kz/yml/offer-view/offers';
 
 // Город по умолчанию для витрины и цен — Алматы

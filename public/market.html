@@ -92,21 +92,22 @@
           То, чего нет в API по токену: список товаров с ценами и остатками, изменение цены, наличия и предзаказа.
         </p>
         <div id="cabinetForm">
-          <label>Телефон или e-mail</label>
-          <input type="text" id="mcLogin" autocomplete="username" placeholder="+7 701 234 56 78" />
-          <p class="muted" style="margin-top: 4px">Владелец входит по номеру телефона, сотрудник — по e-mail.</p>
-          <label>Пароль</label>
-          <input type="password" id="mcPassword" autocomplete="current-password" />
-          <button class="btn btn-primary" id="btnMcLogin" onclick="cabinetLogin()">Войти в кабинет</button>
+          <label>Номер телефона</label>
+          <input type="tel" id="mcLogin" inputmode="numeric" autocomplete="tel" placeholder="+7 701 234 56 78" />
+          <p class="muted" style="margin-top: 4px">
+            Как в приложении Kaspi: номер владельца или сотрудника кабинета. Kaspi пришлёт код по SMS.
+          </p>
+          <button class="btn btn-primary" id="btnMcLogin" onclick="cabinetLogin()">Получить код по SMS</button>
 
           <div id="codeStep" class="hidden" style="margin-top: 12px">
-            <label>Код подтверждения из SMS или письма</label>
+            <label>Код из SMS</label>
             <input type="tel" id="mcCode" inputmode="numeric" autocomplete="one-time-code" placeholder="4–6 цифр" />
             <button class="btn btn-primary" id="btnMcCode" onclick="cabinetConfirmCode()">Подтвердить код</button>
+            <button class="link-btn" onclick="cabinetRestart()">← Изменить номер</button>
           </div>
 
           <details id="cookieLogin" style="margin-top: 16px">
-            <summary style="cursor: pointer; font-weight: 600">Не входит или просит SMS? Вход через браузер</summary>
+            <summary style="cursor: pointer; font-weight: 600">SMS не приходит? Вход через браузер</summary>
             <ol class="muted" style="margin: 8px 0 0 18px; line-height: 1.6">
               <li>На компьютере откройте <b>kaspi.kz/mc</b> в Chrome и войдите как обычно (с SMS-кодом).</li>
               <li>Нажмите <b>F12</b> → вкладка <b>Network</b> → обновите страницу (F5).</li>

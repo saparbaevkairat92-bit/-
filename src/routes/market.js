@@ -153,22 +153,20 @@ router.post('/connect', async (req, res) => {
   }
 });
 
-// ═══ Кабинет продавца: вход ═══
+// ═══ Кабинет продавца: вход по телефону и SMS-коду (как в Kaspi Pay) ═══
 
-// Вход по телефону (или e-mail сотрудника) и паролю. Поле `login`; `email`
-// оставлено для старых клиентов
+// Шаг 1: телефон → Kaspi шлёт SMS. Возвращает needCode + запечатанный mcPending.
 router.post('/cabinet/login', async (req, res) => {
-  const login = String(req.body?.login || req.body?.email || '').trim();
-  const password = String(req.body?.password || '');
+  const phone = String(req.body?.phone || req.body?.login || '').trim();
   try {
-    cabinetOk(res, req, await cabinet.login(login, password));
+    const { pending } = await cabinet.startPhoneLogin(phone);
+    res.json({ needCode: true, mcPending: seal(pending) });
   } catch (err) {
     fail(res, err);
   }
 });
 
-// Второй шаг двухфакторной защиты: код из SMS/письма. mcPending — запечатанное
-// состояние из ответа /cabinet/login (409 needCode)
+// Шаг 2: код из SMS. mcPending — запечатанное состояние из ответа шага 1
 router.post('/cabinet/confirm-code', async (req, res) => {
   let pending;
   try {
