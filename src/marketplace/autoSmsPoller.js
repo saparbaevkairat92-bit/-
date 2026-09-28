@@ -101,7 +101,7 @@ export const runOnce = async ({ fetchOrders, fetchEntries } = {}) => {
           stats.skipped += 1;
           continue;
         }
-        await sendOne(cfg, event, code, attrs, pick.template, stats);
+        await sendOne(cfg, event, code, attrs, pick.template, stats, order.id);
       }
     }
   }
@@ -110,13 +110,13 @@ export const runOnce = async ({ fetchOrders, fetchEntries } = {}) => {
 
 // Сообщение в чат Kaspi через сохранённую сессию кабинета. Свежие cookie
 // кабинета сразу кладём обратно — иначе сессия «протухнет» быстрее.
-export const sendViaChat = async (code, text, phone) => {
+export const sendViaChat = async (code, text, phone, orderId) => {
   // Одна сессия кабинета на сервер — та же, что у авто-демпинга
   const st = shopStore.getState();
   const sess = st.mcSession ? unsealToken(st.mcSession) : null;
   if (!sess || !sess.jar) return { ok: false, detail: 'нет сессии кабинета — войдите в кабинет Kaspi' };
   try {
-    const r = await sendChatMessage(sess.jar, { orderCode: code, text, phone, merchantUid: sess.merchantUid });
+    const r = await sendChatMessage(sess.jar, { orderCode: code, orderId, text, phone, merchantUid: sess.merchantUid });
     shopStore.setSession(encryptSecret(Buffer.from(JSON.stringify({ ...sess, jar: r.jar }), 'utf8')), sess.merchantUid);
     return { ok: true, detail: 'отправлено в чат', id: r.chatId };
   } catch (err) {
@@ -125,14 +125,14 @@ export const sendViaChat = async (code, text, phone) => {
   }
 };
 
-const sendOne = async (cfg, event, code, attrs, template, stats) => {
+const sendOne = async (cfg, event, code, attrs, template, stats, orderId) => {
   const phone = customerPhone(attrs);
   const text = render(template, orderContext(attrs, cfg.shopName));
   let res = { ok: false, detail: 'канал не выбран' };
   let channel = 'sms';
   if (usesChat(cfg)) {
     channel = 'chat';
-    res = await sendViaChat(code, text, phone);
+    res = await sendViaChat(code, text, phone, orderId);
   }
   if (!res.ok && usesSms(cfg)) {
     if (!phone) {

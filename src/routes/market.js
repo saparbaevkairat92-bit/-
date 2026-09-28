@@ -401,10 +401,11 @@ const chatFail = (res, err) => {
 };
 
 router.post('/chat/send', requireCabinet, async (req, res) => {
-  const { orderCode, text, phone } = req.body || {};
+  const { orderCode, orderId, text, phone } = req.body || {};
   try {
     const r = await sendChatMessage(req.cabinet.jar, {
       orderCode,
+      orderId,
       text,
       phone,
       merchantUid: req.cabinet.merchantUid,
@@ -421,6 +422,7 @@ router.post('/chat/probe', requireCabinet, async (req, res) => {
   try {
     const r = await sendChatMessage(req.cabinet.jar, {
       orderCode: req.body?.orderCode,
+      orderId: req.body?.orderId,
       merchantUid: req.cabinet.merchantUid,
       dryRun: true,
     });
