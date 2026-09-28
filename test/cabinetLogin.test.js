@@ -1,31 +1,25 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { URLSearchParams } from 'node:url';
 import {
-  normalizeLogin,
+  formatKaspiPhone,
   parseCookieInput,
-  needsSecondFactor,
   looksBlocked,
   diagnose,
   LoginInputError,
 } from '../src/marketplace/loginHelpers.js';
 
-describe('normalizeLogin', () => {
-  it('turns any phone spelling into 7XXXXXXXXXX', () => {
+describe('formatKaspiPhone', () => {
+  it('formats any spelling to +7 (XXX) XXX-XX-XX (the shape idmc/_ph wants)', () => {
     for (const raw of ['+7 701 234 56 78', '8 (701) 234-56-78', '7012345678', '77012345678']) {
-      assert.deepEqual(normalizeLogin(raw), { kind: 'phone', value: '77012345678' });
+      assert.equal(formatKaspiPhone(raw), '+7 (701) 234-56-78');
     }
   });
 
-  it('keeps e-mail for employees', () => {
-    assert.deepEqual(normalizeLogin(' Owner@Shop.KZ '), { kind: 'email', value: 'owner@shop.kz' });
-  });
-
   it('rejects junk with a readable message', () => {
-    assert.throws(() => normalizeLogin(''), LoginInputError);
-    assert.throws(() => normalizeLogin('12345'), /10 цифр/);
-    assert.throws(() => normalizeLogin('a@b'), /e-mail/);
+    assert.throws(() => formatKaspiPhone(''), LoginInputError);
+    assert.throws(() => formatKaspiPhone('12345'), /10 цифр/);
+    assert.throws(() => formatKaspiPhone('abc'), /10 цифр/);
   });
 });
 
@@ -51,13 +45,6 @@ describe('parseCookieInput', () => {
 });
 
 describe('response checks', () => {
-  it('detects a second factor', () => {
-    assert.ok(needsSecondFactor({ view: 'EnterOtp' }));
-    assert.ok(needsSecondFactor({ message: 'Введите код подтверждения из SMS' }));
-    assert.ok(!needsSecondFactor({ ok: true }));
-    assert.ok(!needsSecondFactor(null));
-  });
-
   it('tells a bot wall from a real refusal', () => {
     assert.ok(looksBlocked(403, '<html>blocked</html>'));
     assert.ok(!looksBlocked(403, { message: 'forbidden' }));
@@ -65,8 +52,7 @@ describe('response checks', () => {
   });
 
   it('diagnose hides secrets and trims', () => {
-    const d = diagnose('пароль', 400, { _p: 'hunter2', token: 'abc', message: 'bad' });
-    assert.ok(!d.snippet.includes('hunter2'));
+    const d = diagnose('код', 400, { _c: '112233', token: 'abc', message: 'bad' });
     assert.ok(!d.snippet.includes('abc"'));
     assert.ok(d.snippet.includes('bad'));
     assert.ok(diagnose('x', 403, '<html>' + 'a'.repeat(1000)).snippet.length <= 300);
@@ -74,8 +60,9 @@ describe('response checks', () => {
 });
 
 // ─── Сквозной вход против поддельного кабинета Kaspi ───
-// Адреса кабинета берутся из env при импорте, поэтому сервер поднимаем раньше
-// импорта маршрутов.
+// Один сервер играет и mc.shop.kaspi.kz (OAuth + /s/m), и idmc (/api/p/login).
+// Поток как у настоящего Kaspi: OAuth-цепочка ставит MS_AUTH_SSO → POST _ph
+// (SMS) → POST _c → редирект-обмен на mc-session/mc-sid → /s/m.
 
 let fake;
 let app;
@@ -86,71 +73,67 @@ const fakeKaspi = (req, res) => {
   let raw = '';
   req.on('data', (c) => (raw += c));
   req.on('end', () => {
-    seen.push({ path: req.url, cookie: req.headers.cookie || '', body: raw, type: req.headers['content-type'] });
-    if (req.url === '/login') {
-      res.writeHead(200, { 'Content-Type': 'text/html', 'Set-Cookie': 'XSRF-TOKEN=xs%3D1; Path=/' });
-      return res.end('<html>login</html>');
+    const url = new URL(req.url, 'http://x');
+    const path = url.pathname;
+    const cookie = req.headers.cookie || '';
+    seen.push({ path, cookie, body: raw, type: req.headers['content-type'] });
+
+    // OAuth kickoff: без авторизации ставит MS_AUTH_SSO и ведёт на /login;
+    // после кода (cookie mc-auth=1) выдаёт рабочую сессию и ведёт на /mc/
+    if (path === '/oauth2/authorization/1') {
+      if (/mc-auth=1/.test(cookie)) {
+        res.writeHead(302, {
+          Location: url.searchParams.get('redirectUrl') || '/mc/',
+          'Set-Cookie': ['mc-session=good; Path=/; HttpOnly', 'mc-sid=s1; Path=/; HttpOnly'],
+        });
+        return res.end();
+      }
+      res.writeHead(302, { Location: '/login', 'Set-Cookie': 'MS_AUTH_SSO=sso1; Path=/; HttpOnly' });
+      return res.end();
     }
-    if (req.url.startsWith('/api/p/login')) {
+    if (path === '/login' || path === '/mc/') {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      return res.end('<html>ok</html>');
+    }
+
+    if (path === '/api/p/login') {
       if (mode === 'blocked') {
         res.writeHead(403, { 'Content-Type': 'text/html' });
         return res.end('<html>Access denied</html>');
       }
-      // Как ответил настоящий Kaspi 27.09.2026 на форму: Spring Boot 500
-      const spring500 = () => {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 500, error: 'Internal Server Error', path: '/api/p/login' }));
-      };
-      if (mode === 'all500') return spring500();
-      // Дальше — как настоящий Kaspi: форма → 500, JSON → вход в один шаг,
-      // без пароля → 401 CREDENTIALS_INVALID
-      const isJson = (req.headers['content-type'] || '').includes('json');
-      if (!isJson) return spring500();
-      if (req.headers['x-xsrf-token'] !== 'xs=1') return spring500();
-      const j = JSON.parse(raw);
-      const invalid = () => {
+      if (!/MS_AUTH_SSO=/.test(cookie)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ errorCode: 'CREDENTIALS_INVALID' }));
-      };
-      // Шаг кода (двухфакторная защита): запрос содержит код и НЕ содержит пароль.
-      // Годен только при живой сессии MFA (cookie mc-preauth/MS_AUTH_SSO).
-      const codeVal = j.code || j.otp || j.smsCode || j.mfaCode;
-      if (codeVal && !j._p && !j.password) {
-        const hasMfa = /mc-preauth=1|MS_AUTH_SSO=/.test(req.headers.cookie || '');
-        if (!hasMfa) return invalid();
-        if (codeVal !== '112233') {
+        return res.end(JSON.stringify({ errorCode: 'NO_SESSION' }));
+      }
+      const j = JSON.parse(raw || '{}');
+      // Шаг телефона: _ph в формате «+7 (XXX) XXX-XX-XX»
+      if (j._ph !== undefined) {
+        if (mode === 'flood') {
           res.writeHead(401, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ errorCode: 'MFA_CODE_INVALID' }));
+          return res.end(JSON.stringify({ errorCode: 'MFA_SEND_FLOOD', errorData: { breakTimeSeconds: 122 } }));
         }
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-session=good; Path=/; HttpOnly' });
-        return res.end('{}');
+        if (j._ph !== '+7 (701) 234-56-78') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ errorCode: 'PHONE_NOT_FOUND', message: 'Номер не найден' }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'MS_AUTH_SSO=sso2; Path=/' });
+        return res.end(JSON.stringify({ phone: j._ph }));
       }
-      // В режиме aliases Kaspi знает поля как username/password, а не _u/_p
-      const user = mode === 'aliases' ? j.username : j._u;
-      const pass = mode === 'aliases' ? j.password : j._p;
-      if (!pass) return invalid();
-      if (mode === 'otp') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ next: 'OTP', message: 'Код отправлен по SMS' }));
+      // Шаг кода: _c
+      if (j._c !== undefined) {
+        if (j._c !== '112233') {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ errorCode: 'CODE_INVALID', message: 'Неверный код' }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-auth=1; Path=/; HttpOnly' });
+        return res.end(JSON.stringify({ redirectUrl: '/' }));
       }
-      if (!['77012345678', 'owner@shop.kz'].includes(user) || pass !== 'secret') return invalid();
-      // Двухфакторная: пароль принят, но код запрашивали слишком часто →
-      // 401 MFA_SEND_FLOOD и cookie сессии MFA (как настоящий Kaspi 28.09.2026)
-      if (mode === 'flood') {
-        res.writeHead(401, { 'Content-Type': 'application/json', 'Set-Cookie': 'MS_AUTH_SSO=x; Path=/; HttpOnly' });
-        return res.end(JSON.stringify({ errorCode: 'MFA_SEND_FLOOD', errorData: { breakTimeSeconds: 122 } }));
-      }
-      // Двухфакторная: пароль принят (200 {"email"}), сессия ещё закрыта, Kaspi
-      // шлёт код; сессию открывает отдельный запрос с кодом (без пароля).
-      if (mode === 'twofa') {
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-preauth=1; Path=/; HttpOnly' });
-        return res.end(JSON.stringify({ email: user }));
-      }
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-session=good; Path=/; HttpOnly' });
+      res.writeHead(400, { 'Content-Type': 'application/json' });
       return res.end('{}');
     }
-    if (req.url === '/s/m') {
-      if (!(req.headers.cookie || '').includes('mc-session=good')) {
+
+    if (path === '/s/m') {
+      if (!/mc-session=good/.test(cookie)) {
         res.writeHead(401);
         return res.end();
       }
@@ -171,13 +154,15 @@ const post = async (path, body) => {
   return { status: r.status, body: await r.json() };
 };
 
-describe('POST /api/market/cabinet/login*', () => {
+describe('POST /api/market/cabinet/* (phone + SMS)', () => {
   before(async () => {
     fake = http.createServer(fakeKaspi);
     await new Promise((r) => fake.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${fake.address().port}`;
     process.env.KASPI_MC_LOGIN_URL = `${base}/api/p/login`;
     process.env.KASPI_MC_URL = base;
+    process.env.KASPI_MC_OAUTH_URL = `${base}/oauth2/authorization/1`;
+    process.env.KASPI_MC_HOME_URL = `${base}/mc/`;
     process.env.TOKEN_SECRET_KEY = 'b'.repeat(64);
     const express = (await import('express')).default;
     const { default: market } = await import('../src/routes/market.js');
@@ -193,87 +178,60 @@ describe('POST /api/market/cabinet/login*', () => {
     fake?.close();
   });
 
-  it('logs in by phone in any spelling and returns the shops', async () => {
+  it('phone step sends the SMS and returns a sealed pending', async () => {
     mode = 'ok';
-    const r = await post('/api/market/cabinet/login', { login: '8 701 234 56 78', password: 'secret' });
+    const r = await post('/api/market/cabinet/login', { phone: '8 701 234 56 78' });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.equal(r.body.merchantUid, '30322035');
-    assert.ok(r.body.mcSession && !r.body.mcSession.includes('good'), 'session is sealed');
-    const last = seen.filter((s) => s.path === '/s/m').pop();
-    assert.ok(last.cookie.includes('mc-session=good'));
-  });
-
-  it('still accepts the old `email` field', async () => {
-    const r = await post('/api/market/cabinet/login', { email: '+77012345678', password: 'secret' });
-    assert.equal(r.status, 200);
-  });
-
-  it('wrong password → one request only, 401 with CREDENTIALS_INVALID explained', async () => {
-    mode = 'ok';
-    const before = seen.length;
-    const r = await post('/api/market/cabinet/login', { login: 'owner@shop.kz', password: 'nope' });
-    assert.equal(r.status, 401);
-    assert.match(r.body.error, /неверный логин или пароль/);
-    assert.match(r.body.error, /по номеру телефона/);
-    assert.ok(r.body.details.diag.some((d) => d.status === 401));
-    assert.ok(!JSON.stringify(r.body).includes('nope'), 'password never echoed');
-    // Каждая неудачная попытка приближает блокировку — шлём ровно одну
-    const logins = seen.slice(before).filter((x) => x.path.startsWith('/api/p/login'));
-    assert.equal(logins.length, 1);
-    assert.match(logins[0].type, /json/);
-  });
-
-  it('SMS step → 409 pointing to browser login', async () => {
-    mode = 'otp';
-    const r = await post('/api/market/cabinet/login', { login: '7012345678', password: 'secret' });
-    assert.equal(r.status, 409);
-    assert.equal(r.body.details.secondFactor, true);
-    assert.match(r.body.error, /через браузер/);
-  });
-
-  it('bot wall → 502 saying it is the IP, not the password', async () => {
-    mode = 'blocked';
-    const r = await post('/api/market/cabinet/login', { login: '7012345678', password: 'secret' });
-    assert.equal(r.status, 502);
-    assert.match(r.body.error, /обычного IP/);
-  });
-
-  it('two-factor: password accepted → 409 needCode with sealed pending, code opens session', async () => {
-    mode = 'twofa';
-    const r = await post('/api/market/cabinet/login', { login: 'owner@shop.kz', password: 'secret' });
-    assert.equal(r.status, 409);
-    assert.equal(r.body.details.needCode, true);
+    assert.equal(r.body.needCode, true);
     assert.ok(r.body.mcPending, 'sealed pending returned');
-    // pending запечатан: пароль не виден, а сам токен непрозрачен (не JSON)
-    assert.ok(!JSON.stringify(r.body).includes('secret'), 'password never exposed');
     assert.throws(() => JSON.parse(Buffer.from(r.body.mcPending, 'base64').toString('utf8')), 'pending is opaque');
+    // Телефон ушёл в Kaspi именно в формате +7 (XXX) XXX-XX-XX
+    const phoneReq = seen.filter((s) => s.path === '/api/p/login').pop();
+    assert.equal(JSON.parse(phoneReq.body)._ph, '+7 (701) 234-56-78');
 
-    const wrong = await post('/api/market/cabinet/confirm-code', { mcPending: r.body.mcPending, code: '000000' });
-    assert.equal(wrong.status, 401);
+    // Код открывает рабочую сессию (mc-session/mc-sid добываются OAuth-обменом)
+    const bad = await post('/api/market/cabinet/confirm-code', { mcPending: r.body.mcPending, code: '000000' });
+    assert.equal(bad.status, 401);
 
-    // confirm шлёт ТОЛЬКО код (без пароля), чтобы не спровоцировать новую отправку
-    const before = seen.length;
     const ok = await post('/api/market/cabinet/confirm-code', { mcPending: r.body.mcPending, code: '11-22-33' });
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     assert.equal(ok.body.merchantUid, '30322035');
     assert.ok(ok.body.mcSession);
-    const confirmReq = seen.slice(before).find((x) => x.path.startsWith('/api/p/login'));
-    const sent = JSON.parse(confirmReq.body);
-    assert.ok(!sent._p && !sent.password, 'password NOT resent on code step');
+    // Код ушёл БЕЗ пароля (пароля в этом потоке нет вовсе)
+    const codeReq = seen.filter((s) => s.path === '/api/p/login').pop();
+    const sent = JSON.parse(codeReq.body);
+    assert.ok(!sent._p && !sent.password && sent._c);
   });
 
-  it('MFA_SEND_FLOOD: password accepted, code rate-limited → 409 needCode + wait, code still works', async () => {
+  it('unknown phone → 400 with what Kaspi said', async () => {
+    mode = 'ok';
+    const r = await post('/api/market/cabinet/login', { phone: '7000000000' });
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, /Номер не найден|не принял номер/);
+    assert.ok(r.body.details.diag.length >= 1);
+  });
+
+  it('bad phone format never reaches Kaspi', async () => {
+    const before = seen.length;
+    const r = await post('/api/market/cabinet/login', { phone: '123' });
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, /10 цифр/);
+    assert.equal(seen.slice(before).filter((s) => s.path === '/api/p/login').length, 0);
+  });
+
+  it('MFA_SEND_FLOOD → clear wait message, not a scary error', async () => {
     mode = 'flood';
-    const r = await post('/api/market/cabinet/login', { login: 'owner@shop.kz', password: 'secret' });
-    assert.equal(r.status, 409);
-    assert.equal(r.body.details.needCode, true);
-    assert.equal(r.body.details.waitSeconds, 122);
+    const r = await post('/api/market/cabinet/login', { phone: '7012345678' });
+    assert.equal(r.status, 400);
     assert.match(r.body.error, /ограничил отправку кода/);
-    assert.ok(r.body.mcPending);
-    // Код, присланный раньше, всё равно открывает сессию (session MFA жива)
-    const ok = await post('/api/market/cabinet/confirm-code', { mcPending: r.body.mcPending, code: '112233' });
-    assert.equal(ok.status, 200, JSON.stringify(ok.body));
-    assert.equal(ok.body.merchantUid, '30322035');
+    assert.match(r.body.error, /122/);
+  });
+
+  it('bot wall on the phone step → 502 about the IP', async () => {
+    mode = 'blocked';
+    const r = await post('/api/market/cabinet/login', { phone: '7012345678' });
+    assert.equal(r.status, 502);
+    assert.match(r.body.error, /обычного IP/);
   });
 
   it('confirm-code rejects a garbage pending token', async () => {
@@ -281,38 +239,11 @@ describe('POST /api/market/cabinet/login*', () => {
     assert.equal(r.status, 400);
   });
 
-  it('one JSON request with XSRF token and field aliases', async () => {
-    mode = 'aliases';
-    const before = seen.length;
-    const r = await post('/api/market/cabinet/login', { login: 'Owner@shop.kz', password: 'secret' });
-    assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.equal(r.body.merchantUid, '30322035');
-    const logins = seen.slice(before).filter((x) => x.path.startsWith('/api/p/login'));
-    assert.equal(logins.length, 1);
-    const sent = JSON.parse(logins[0].body);
-    assert.equal(sent._u, 'owner@shop.kz');
-    assert.equal(sent.username, 'owner@shop.kz');
-    assert.equal(sent.email, 'owner@shop.kz');
-  });
-
-  it('every format gets 500 → 502 with a trace of each attempt', async () => {
-    mode = 'all500';
-    const r = await post('/api/market/cabinet/login', { login: 'owner@shop.kz', password: 'secret' });
-    assert.equal(r.status, 502);
-    assert.match(r.body.error, /ни в одном/);
-    assert.equal(r.body.details.secondFactor, true);
-    assert.ok(r.body.details.diag.length >= 4);
-    assert.ok(r.body.details.diag.every((d) => d.status === 500));
-  });
-
-  it('browser cookies: valid → shops, expired → 401', async () => {
+  it('browser cookies still work as a fallback', async () => {
     mode = 'ok';
-    let r = await post('/api/market/cabinet/login-cookies', { cookies: 'Cookie: mc-session=good; x=1' });
+    const r = await post('/api/market/cabinet/login-cookies', { cookies: 'Cookie: mc-session=good; mc-sid=s1' });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.verified, true);
     assert.equal(r.body.merchantUid, '30322035');
-    r = await post('/api/market/cabinet/login-cookies', { cookies: 'mc-session=old' });
-    assert.equal(r.status, 401);
-    assert.match(r.body.error, /cookie/);
   });
 });

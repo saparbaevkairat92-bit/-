@@ -1,27 +1,22 @@
 // ─── Вход в кабинет продавца: разбор ввода и ответов, без сети ───
 //
-// В кабинет Kaspi входят по номеру телефона (владелец) или e-mail (сотрудник),
-// а при включённой двухфакторной защите ещё и по SMS-коду. Kaspi может в любой
-// момент изменить форму входа, поэтому есть запасной путь: человек сам входит в
-// kaspi.kz/mc в браузере и вставляет сюда cookie сессии.
+// В кабинет Kaspi входят по номеру телефона и коду из SMS — как в приложении
+// Kaspi Pay, пароля нет. Есть запасной путь: человек сам входит в kaspi.kz/mc в
+// браузере и вставляет сюда cookie сессии.
 
 export class LoginInputError extends Error {}
 
-// Телефон → 7XXXXXXXXXX, e-mail → в нижнем регистре
-export const normalizeLogin = (raw) => {
-  const s = String(raw || '').trim();
-  if (!s) throw new LoginInputError('Введите номер телефона или e-mail кабинета продавца');
-  if (s.includes('@')) {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) throw new LoginInputError('Похоже на e-mail, но с ошибкой');
-    return { kind: 'email', value: s.toLowerCase() };
-  }
-  let d = s.replace(/\D/g, '');
+// Номер телефона → строго в формате Kaspi «+7 (XXX) XXX-XX-XX»: именно так его
+// принимает idmc/api/p/login (поле _ph, подтверждено живой трассой).
+export const formatKaspiPhone = (raw) => {
+  let d = String(raw || '').replace(/\D/g, '');
   if (d.length === 11 && d[0] === '8') d = `7${d.slice(1)}`;
-  if (d.length === 10 && d[0] === '7') d = `7${d}`;
+  if (d.length === 10) d = `7${d}`;
   if (d.length !== 11 || d[0] !== '7') {
     throw new LoginInputError('Номер телефона — 10 цифр после +7, например +7 701 234 56 78');
   }
-  return { kind: 'phone', value: d };
+  const p = d.slice(1); // 10 цифр после 7
+  return `+7 (${p.slice(0, 3)}) ${p.slice(3, 6)}-${p.slice(6, 8)}-${p.slice(8, 10)}`;
 };
 
 // Cookie из браузера. Принимаем, как их удобно скопировать:

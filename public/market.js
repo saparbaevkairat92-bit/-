@@ -145,19 +145,19 @@ const disconnectToken = () => {
   renderConnections();
 };
 
+// Шаг 1: номер телефона → Kaspi шлёт SMS, показываем поле кода
 const cabinetLogin = async () => {
-  const login = $('mcLogin').value.trim();
-  const password = $('mcPassword').value;
-  if (!login || !password) return showMsg('cabinetMsg', 'Введите телефон (или e-mail) и пароль', 'err');
+  const phone = $('mcLogin').value.trim();
+  if (!phone) return showMsg('cabinetMsg', 'Введите номер телефона', 'err');
   const btn = $('btnMcLogin');
   btn.disabled = true;
-  showMsg('cabinetMsg', 'Входим в кабинет Kaspi…', 'info');
+  showMsg('cabinetMsg', 'Запрашиваем код у Kaspi…', 'info');
   try {
-    const r = await post('/api/market/cabinet/login', { login, password });
-    setState({ mcSession: r.mcSession, merchants: r.merchants, merchantUid: r.merchantUid, mcPending: null });
-    $('mcPassword').value = '';
-    $('codeStep').classList.add('hidden');
-    showMsg('cabinetMsg', '', '');
+    const r = await post('/api/market/cabinet/login', { phone });
+    setState({ mcPending: r.mcPending });
+    $('codeStep').classList.remove('hidden');
+    $('mcCode').focus();
+    showMsg('cabinetMsg', 'Kaspi отправил код по SMS. Введите его ниже.', 'info');
     renderConnections();
   } catch (e) {
     showLoginError(e);
@@ -166,12 +166,12 @@ const cabinetLogin = async () => {
   }
 };
 
-// Второй шаг: код подтверждения (двухфакторная защита Kaspi)
+// Шаг 2: код из SMS → кабинет подключён
 const cabinetConfirmCode = async () => {
   const code = $('mcCode').value.trim();
   const mcPending = getState().mcPending;
-  if (!code) return showMsg('cabinetMsg', 'Введите код из SMS или письма', 'err');
-  if (!mcPending) return showMsg('cabinetMsg', 'Сессия входа устарела — войдите заново', 'err');
+  if (!code) return showMsg('cabinetMsg', 'Введите код из SMS', 'err');
+  if (!mcPending) return showMsg('cabinetMsg', 'Сессия входа устарела — запросите код заново', 'err');
   const btn = $('btnMcCode');
   btn.disabled = true;
   showMsg('cabinetMsg', 'Проверяем код…', 'info');
@@ -179,17 +179,23 @@ const cabinetConfirmCode = async () => {
     const r = await post('/api/market/cabinet/confirm-code', { code, mcPending });
     setState({ mcSession: r.mcSession, merchants: r.merchants, merchantUid: r.merchantUid, mcPending: null });
     $('mcCode').value = '';
-    $('mcPassword').value = '';
     $('codeStep').classList.add('hidden');
     showMsg('cabinetMsg', '', '');
     renderConnections();
   } catch (e) {
-    // Неверный код — Kaspi мог прислать новое состояние; обновим, если пришло
     if (e.mcPending) setState({ mcPending: e.mcPending });
     showLoginError(e);
   } finally {
     btn.disabled = false;
   }
+};
+
+// «Изменить номер» — вернуться к вводу телефона
+const cabinetRestart = () => {
+  setState({ mcPending: null });
+  $('mcCode').value = '';
+  $('codeStep').classList.add('hidden');
+  showMsg('cabinetMsg', '', '');
 };
 
 const cabinetCookieLogin = async () => {
