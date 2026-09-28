@@ -221,12 +221,12 @@ export const traceChatApi = (texts) => {
   // Как кабинет открывает чат по заказу: createChatById(id, type, url) — нужен type
   result.createCalls = [];
   for (const text of texts) {
-    for (const m of findAll(text, /createChatById\(|\.createChat\(\{/g, 12)) {
+    for (const m of findAll(text, /createChatById\(|openWebchat\w*\(|\.createChat\(\{/g, 20)) {
       const snip = around(text, m.index, 300, 300);
       if (!/createChatById:\(|createChat:e=>/.test(snip.slice(280, 330))) result.createCalls.push(snip);
     }
   }
-  result.createCalls = [...new Set(result.createCalls)].slice(0, 8);
+  result.createCalls = [...new Set(result.createCalls)].slice(0, 16);
   result.client = [...new Set(result.client)].slice(0, 12);
   result.auth = [...new Set(result.auth)].slice(0, 16);
   return result;
@@ -277,10 +277,15 @@ export const discoverChat = async (jar) => {
   // 4. Ленивые чанки кабинета (Vite) — в них и загрузчик виджета, и сам чат
   const viteChunks = new Set();
   for (const s of scanned.filter((x) => x.text)) for (const c of extractViteChunks(s.text, s.url)) viteChunks.add(c);
-  const queue = [...chunkUrls, ...[...viteChunks].filter((u) => /chat|message|dialog|widget/i.test(u)), ...viteChunks];
+  // Страница заказа — там кабинет открывает чат с покупателем (нужен type)
+  const queue = [
+    ...chunkUrls,
+    ...[...viteChunks].filter((u) => /chat|message|dialog|widget|order/i.test(u)),
+    ...viteChunks,
+  ];
   let fetched = 0;
   const fetchQueue = async () => {
-    while (queue.length && fetched < MAX_CHUNKS * 3) {
+    while (queue.length && fetched < MAX_CHUNKS * 6) {
       const url = queue.shift();
       if (scanned.some((s) => s.url === url)) continue;
       const text = await scan(url, '*/*');
@@ -348,8 +353,9 @@ export const discoverChat = async (jar) => {
         scanned.filter((x) => x.text && /chats\/api\/mobile|sendMessage/.test(x.text)).map((x) => x.text),
       ),
       // Вызовы открытия чата — в коде самого кабинета (страница заказа)
-      createCalls: traceChatApi(scanned.filter((x) => x.text && /createChat/.test(x.text)).map((x) => x.text))
-        .createCalls,
+      createCalls: traceChatApi(
+        scanned.filter((x) => x.text && /createChat|openWebchat/.test(x.text)).map((x) => x.text),
+      ).createCalls,
     },
     candidates: list.slice(0, 120),
     errors,
