@@ -59,6 +59,130 @@
         font-size: 13px;
         padding: 10px 4px;
       }
+      /* Маркетплейс — рабочий экран: шире, чем касса */
+      .container {
+        max-width: 1100px;
+      }
+      .search {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        background: #fff;
+        padding: 4px 0 8px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 12px;
+        margin-top: 12px;
+      }
+      .icard {
+        border: 1px solid #eee;
+        border-radius: 14px;
+        padding: 14px;
+        background: #fff;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+      }
+      .icard .head {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+      }
+      .icard .head img {
+        width: 64px;
+        height: 64px;
+        object-fit: contain;
+        border-radius: 8px;
+        background: #fafafa;
+        flex: none;
+      }
+      .icard .title {
+        font-weight: 600;
+        line-height: 1.3;
+        word-break: break-word;
+      }
+      .icard .sub {
+        font-size: 12px;
+        color: #888;
+      }
+      .icard input,
+      .icard select {
+        padding: 8px 10px;
+        font-size: 15px;
+      }
+      .icard label {
+        margin-top: 4px;
+      }
+      .icard .btn {
+        padding: 10px;
+        font-size: 14px;
+        margin: 0;
+      }
+      .icard .acts {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-top: auto;
+        padding-top: 6px;
+      }
+      .icard .acts > * {
+        flex: 1;
+      }
+      .icard .point {
+        margin-top: 2px;
+        padding: 6px 10px;
+      }
+      .icard .point .row input {
+        min-width: 0;
+      }
+      .icard .items {
+        font-size: 13px;
+        border-top: 1px dashed #eee;
+        padding-top: 6px;
+      }
+      .chip {
+        display: inline-block;
+        font-size: 12px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #f0f0f0;
+        color: #555;
+      }
+      .chip.ok {
+        background: #e8f5e9;
+        color: #2e7d32;
+      }
+      .chip.no {
+        background: #fdecea;
+        color: #c62828;
+      }
+      .bubble {
+        background: #f1f8e9;
+        border-radius: 12px 12px 4px 12px;
+        padding: 8px 10px;
+        font-size: 13px;
+        align-self: flex-end;
+        max-width: 95%;
+      }
+      .bubble.failed {
+        background: #fdecea;
+      }
+      .bubble .meta {
+        font-size: 11px;
+        color: #888;
+        margin-top: 2px;
+      }
+      .settings {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 16px;
+      }
+      .settings > .card {
+        margin: 0;
+      }
     </style>
   </head>
   <body>
@@ -155,32 +279,30 @@
       <div id="ordersTab">
         <div class="card">
           <h2>Заказы за 14 дней</h2>
-          <div class="row">
-            <select id="orderState">
-              <option value="NEW">Новые</option>
-              <option value="SIGN_REQUIRED">Нужна подпись</option>
-              <option value="KASPI_DELIVERY">Kaspi Доставка</option>
-              <option value="DELIVERY">Своя доставка</option>
-              <option value="PICKUP">Самовывоз</option>
-              <option value="ARCHIVE">Архив</option>
-            </select>
-            <button class="btn btn-secondary" style="margin: 0" onclick="loadOrders()">Показать</button>
+          <div class="search">
+            <div class="row">
+              <select id="orderState" onchange="loadOrders()">
+                <option value="NEW">Новые</option>
+                <option value="SIGN_REQUIRED">Нужна подпись</option>
+                <option value="KASPI_DELIVERY">Kaspi Доставка</option>
+                <option value="DELIVERY">Своя доставка</option>
+                <option value="PICKUP">Самовывоз</option>
+                <option value="ARCHIVE">Архив</option>
+              </select>
+              <button class="btn btn-secondary" style="margin: 0" onclick="loadOrders()">Обновить</button>
+            </div>
+            <input
+              type="search"
+              id="orderSearch"
+              style="margin-top: 8px"
+              placeholder="Поиск: номер заказа, имя, телефон, адрес"
+              oninput="filterOrders()"
+              onkeydown="if (event.key === 'Enter') findOrder();"
+            />
+            <p class="muted" id="ordersCount" style="margin-top: 4px"></p>
           </div>
-          <div class="row" style="margin-top: 8px">
-            <input type="text" id="orderCode" placeholder="Номер заказа" inputmode="numeric" />
-            <button class="btn btn-secondary" style="margin: 0" onclick="findOrder()">Найти</button>
-          </div>
-          <div id="ordersList" style="margin-top: 12px">
-            <p class="muted" style="text-align: center">Подключите токен и нажмите «Показать»</p>
-          </div>
-        </div>
-        <div id="orderDetail" class="hidden">
-          <div class="card">
-            <h2>Заказ <span id="orderDetailCode"></span></h2>
-            <div id="orderDetailContent"></div>
-            <div id="orderActions"></div>
-            <div id="orderMsg" class="hidden" style="margin-top: 8px"></div>
-            <button class="btn btn-secondary" onclick="$('orderDetail').classList.add('hidden')">Закрыть</button>
+          <div id="ordersList" class="grid">
+            <p class="muted">Подключите токен — заказы появятся здесь</p>
           </div>
         </div>
       </div>
@@ -189,26 +311,20 @@
       <div id="offersTab" class="hidden">
         <div class="card">
           <h2>Товары магазина</h2>
-          <div class="row">
-            <input type="text" id="offerQuery" placeholder="Название или артикул" />
-            <button class="btn btn-secondary" style="margin: 0" onclick="loadOffers(0)">Найти</button>
+          <div class="search">
+            <input
+              type="search"
+              id="offerQuery"
+              placeholder="Поиск: название или артикул"
+              oninput="offerSearchInput()"
+              onkeydown="if (event.key === 'Enter') loadOffers(0);"
+            />
+            <p class="muted" id="offersCount" style="margin-top: 4px"></p>
           </div>
-          <div id="offersList" style="margin-top: 12px">
-            <p class="muted" style="text-align: center">Войдите в кабинет продавца</p>
+          <div id="offersList" class="grid">
+            <p class="muted">Войдите в кабинет продавца — товары появятся здесь</p>
           </div>
-          <div class="row" id="offersPager" style="margin-top: 8px"></div>
-        </div>
-        <div id="offerEdit" class="hidden">
-          <div class="card">
-            <h2 id="offerEditTitle">Товар</h2>
-            <p class="muted" id="offerEditSku"></p>
-            <label>Цена (₸)</label>
-            <input type="number" id="offerPrice" min="1" inputmode="numeric" />
-            <div id="offerPoints"></div>
-            <button class="btn btn-primary" id="btnSaveOffer" onclick="saveOffer()">Сохранить в Kaspi</button>
-            <div id="offerMsg" class="hidden" style="margin-top: 8px"></div>
-            <button class="btn btn-secondary" onclick="$('offerEdit').classList.add('hidden')">Закрыть</button>
-          </div>
+          <div class="row" id="offersPager" style="margin-top: 12px"></div>
         </div>
       </div>
 
@@ -272,76 +388,82 @@
       <!-- Сообщения покупателю -->
       <div id="smsTab" class="hidden">
         <div class="card">
-          <h2>Сообщения покупателю</h2>
+          <h2>Чаты с покупателями</h2>
           <p class="muted">
-            Kaspi шлёт покупателю только свои уведомления. Здесь магазин сам отправляет SMS: «заказ принят» и «заказ
-            выдан» — автоматически. Заказы берутся по токену API (вкладка «Заказы»).
+            Что магазин отправил каждому покупателю — по заказам. Отправка идёт автоматически: «заказ принят» и «заказ
+            выдан».
           </p>
           <div id="smsWarn"></div>
-
-          <label class="row" style="align-items: center; gap: 8px; margin-top: 8px">
-            <input type="checkbox" id="smsEnabled" style="width: auto" onchange="smsToggle()" />
-            <span><b>Отправлять SMS покупателям автоматически</b></span>
-          </label>
-          <p class="muted" id="smsEnabledHint" style="margin-top: 2px"></p>
-
-          <div class="row" style="margin-top: 8px">
-            <label style="flex: 1"><input type="checkbox" id="smsNew" style="width: auto" /> Новый заказ</label>
-            <label style="flex: 1"><input type="checkbox" id="smsIssued" style="width: auto" /> Заказ выдан</label>
+          <div class="search">
+            <input
+              type="search"
+              id="chatSearch"
+              placeholder="Поиск: номер заказа, телефон, текст"
+              oninput="renderChats()"
+            />
+            <p class="muted" id="chatsCount" style="margin-top: 4px"></p>
           </div>
+          <div id="smsLog" class="grid"></div>
+        </div>
 
-          <h2 style="margin-top: 16px; font-size: 16px">SMS-сервис магазина</h2>
-          <label>Сервис</label>
-          <select id="smsProvider"></select>
-          <div id="smsLoginWrap" class="hidden">
-            <label>Логин SMSC.kz</label>
-            <input type="text" id="smsLogin" autocomplete="off" />
-          </div>
-          <label>API-ключ (пароль) сервиса</label>
-          <input type="password" id="smsKey" autocomplete="off" placeholder="из личного кабинета SMS-сервиса" />
-          <p class="muted" id="smsKeyHint"></p>
-          <div class="row">
-            <div style="flex: 1">
-              <label>Имя отправителя</label>
-              <input type="text" id="smsSender" maxlength="11" placeholder="одобрено в сервисе" />
+        <div class="settings">
+          <div class="card">
+            <h2>Автоотправка</h2>
+            <label class="row" style="align-items: center; gap: 8px; margin-top: 0">
+              <input type="checkbox" id="smsEnabled" style="width: auto; flex: none" onchange="smsToggle()" />
+              <span><b>Отправлять покупателям автоматически</b></span>
+            </label>
+            <p class="muted" id="smsEnabledHint" style="margin-top: 2px"></p>
+            <div class="row" style="margin-top: 8px">
+              <label style="flex: 1"><input type="checkbox" id="smsNew" style="width: auto" /> Новый заказ</label>
+              <label style="flex: 1"><input type="checkbox" id="smsIssued" style="width: auto" /> Заказ выдан</label>
             </div>
-            <div style="flex: 1">
-              <label>Магазин в тексте</label>
-              <input type="text" id="smsShop" placeholder="подставится вместо {shop}" />
+            <p class="muted" id="smsPlaceholders" style="margin-top: 8px"></p>
+            <label>Текст «новый заказ»</label>
+            <textarea id="smsTplNew" rows="3" style="width: 100%"></textarea>
+            <label>Текст «заказ выдан»</label>
+            <textarea id="smsTplIssued" rows="3" style="width: 100%"></textarea>
+            <button class="btn btn-primary" id="btnSmsSave" onclick="smsSave()">Сохранить</button>
+            <div id="smsMsg" class="hidden" style="margin-top: 10px"></div>
+          </div>
+
+          <div class="card">
+            <h2>SMS-сервис магазина</h2>
+            <label style="margin-top: 0">Сервис</label>
+            <select id="smsProvider"></select>
+            <div id="smsLoginWrap" class="hidden">
+              <label>Логин SMSC.kz</label>
+              <input type="text" id="smsLogin" autocomplete="off" />
             </div>
+            <label>API-ключ (пароль) сервиса</label>
+            <input type="password" id="smsKey" autocomplete="off" placeholder="из личного кабинета SMS-сервиса" />
+            <p class="muted" id="smsKeyHint"></p>
+            <div class="row">
+              <div style="flex: 1">
+                <label>Имя отправителя</label>
+                <input type="text" id="smsSender" maxlength="11" placeholder="одобрено в сервисе" />
+              </div>
+              <div style="flex: 1">
+                <label>Магазин в тексте</label>
+                <input type="text" id="smsShop" placeholder="вместо {shop}" />
+              </div>
+            </div>
+            <h2 style="margin-top: 16px; font-size: 16px">Проверка</h2>
+            <label>Ваш номер для пробного сообщения</label>
+            <input type="tel" id="smsTestPhone" inputmode="numeric" placeholder="+7 701 234 56 78" />
+            <div class="row" style="margin-top: 8px">
+              <button class="btn btn-secondary" style="margin: 0" onclick="smsTest('new')">Пробное «принят»</button>
+              <button class="btn btn-secondary" style="margin: 0" onclick="smsTest('issued')">Пробное «выдан»</button>
+            </div>
+            <button class="btn btn-secondary" onclick="smsRun()">Проверить заказы сейчас</button>
           </div>
 
-          <h2 style="margin-top: 16px; font-size: 16px">Тексты</h2>
-          <p class="muted" id="smsPlaceholders"></p>
-          <label>Новый заказ</label>
-          <textarea id="smsTplNew" rows="3" style="width: 100%"></textarea>
-          <label>Заказ выдан</label>
-          <textarea id="smsTplIssued" rows="3" style="width: 100%"></textarea>
-
-          <button class="btn btn-primary" id="btnSmsSave" onclick="smsSave()">Сохранить</button>
-          <div id="smsMsg" class="hidden" style="margin-top: 10px"></div>
-
-          <h2 style="margin-top: 16px; font-size: 16px">Проверка</h2>
-          <label>Ваш номер для пробного SMS</label>
-          <input type="tel" id="smsTestPhone" inputmode="numeric" placeholder="+7 701 234 56 78" />
-          <div class="row" style="margin-top: 8px">
-            <button class="btn btn-secondary" style="margin: 0" onclick="smsTest('new')">Пробное «принят»</button>
-            <button class="btn btn-secondary" style="margin: 0" onclick="smsTest('issued')">Пробное «выдан»</button>
-          </div>
-          <button class="btn btn-secondary" onclick="smsRun()">Проверить заказы сейчас</button>
-
-          <h2 style="margin-top: 16px; font-size: 16px">Журнал SMS</h2>
-          <div id="smsLog"></div>
-
-          <details style="margin-top: 16px">
-            <summary style="cursor: pointer; font-weight: 600">
-              Отправка через чат Kaspi (вместо SMS) — диагностика
-            </summary>
-            <p class="muted" style="margin-top: 8px">
-              Можно слать сообщения прямо в чат Kaspi, как это делает сотрудник в кабинете — бесплатно, без SMS. Kaspi
-              не описывает этот чат, поэтому сначала находим его адрес по вашей сессии кабинета. Кнопка ниже ничего
-              покупателям не отправляет — только читает код кабинета. Нужно, чтобы кабинет был подключён (вход по
-              телефону выше).
+          <div class="card">
+            <h2>Чат Kaspi вместо SMS</h2>
+            <p class="muted">
+              Сообщения можно слать прямо в чат Kaspi, как сотрудник в кабинете — бесплатно. Kaspi не описывает этот
+              чат, поэтому сначала находим его адрес по вашей сессии кабинета. Кнопка ничего покупателям не отправляет —
+              только читает код кабинета.
             </p>
             <button class="btn btn-secondary" id="btnDiscoverChat" onclick="discoverChat()">Найти чат Kaspi</button>
             <p class="muted" style="margin-top: 6px">Результат скопируйте и пришлите разработчику:</p>
@@ -351,7 +473,7 @@
               style="width: 100%; font-family: monospace; font-size: 11px"
               readonly
             ></textarea>
-          </details>
+          </div>
         </div>
       </div>
 

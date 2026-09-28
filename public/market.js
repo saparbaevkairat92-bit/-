@@ -184,6 +184,7 @@ const cabinetConfirmCode = async () => {
   try {
     const r = await post('/api/market/cabinet/confirm-code', { code, mcPending });
     setState({ mcSession: r.mcSession, merchants: r.merchants, merchantUid: r.merchantUid, mcPending: null });
+    offersLoaded = false;
     $('mcCode').value = '';
     $('codeStep').classList.add('hidden');
     showMsg('cabinetMsg', '', '');
@@ -214,6 +215,7 @@ const cabinetCookieLogin = async () => {
   try {
     const r = await post('/api/market/cabinet/login-cookies', { cookies, merchantUid });
     setState({ mcSession: r.mcSession, merchants: r.merchants, merchantUid: r.merchantUid });
+    offersLoaded = false;
     $('mcCookies').value = '';
     showMsg('cabinetMsg', r.verified ? '' : 'Подключено. Проверим на списке товаров — откройте «Товары».', 'info');
     renderConnections();
@@ -226,6 +228,7 @@ const cabinetCookieLogin = async () => {
 
 const cabinetLogout = () => {
   setState({ mcSession: null, merchants: null, merchantUid: null, mcPending: null });
+  offersLoaded = false;
   $('codeStep').classList.add('hidden');
   renderConnections();
 };
@@ -234,6 +237,8 @@ const selectMerchant = async () => {
   try {
     const r = await post('/api/market/cabinet/merchant', { merchantUid: $('merchantSelect').value });
     setState({ mcSession: r.mcSession, merchantUid: r.merchantUid });
+    offersLoaded = false;
+    if (!$('offersTab').classList.contains('hidden')) loadOffers(0);
   } catch (e) {
     showMsg('cabinetMsg', e.message, 'err');
   }
@@ -251,6 +256,7 @@ const switchTab = (tab) => {
   if (tab === 'wms') renderWms();
   if (tab === 'sms') loadSms();
   if (tab === 'competitors') showReprice();
+  if (tab === 'offers' && !offersLoaded) loadOffers(0);
 };
 
 // Показать блок демпинга сразу при входе в кабинет — не прятать, даже если
@@ -261,181 +267,254 @@ const showReprice = () => {
   if (on) loadAuto();
 };
 
-// ═══ Заказы ═══
+// ═══ Заказы — открытые карточки ═══
+//
+// Всё про заказ сразу на карточке: покупатель, адрес, действия. Состав
+// догружается кнопкой прямо в карточку — без отдельной панели.
 
-let currentOrder = null;
+let orders = [];
 
-const orderRow = (o) => `
-  <div class="op-item" data-id="${esc(o.id)}">
-    <div class="op-row">
-      <span class="op-name">№ ${esc(o.code)}</span>
-      <span class="op-amount">${esc(money(o.totalPrice))}</span>
-    </div>
-    <div class="op-date">${esc(dateTime(o.creationDate))} · ${esc(o.status || '')}${o.preOrder ? ' · предзаказ' : ''}</div>
-    <div class="op-date">${esc(o.customer?.name || '')}</div>
-  </div>`;
+const ORDER_STATUS = {
+  APPROVED_BY_BANK: ['Ждёт принятия', 'no'],
+  ACCEPTED_BY_MERCHANT: ['Принят', 'ok'],
+  COMPLETED: ['Выдан', 'ok'],
+  CANCELLED: ['Отменён', ''],
+  CANCELLING: ['Отменяется', ''],
+  KASPI_DELIVERY_RETURN_REQUESTED: ['Возврат', 'no'],
+  RETURNED: ['Возвращён', ''],
+};
+
+const orderCard = (o) => {
+  const [label, cls] = ORDER_STATUS[o.status] || [o.status || '—', ''];
+  const id = esc(o.id);
+  let acts = '';
+  if (o.status === 'APPROVED_BY_BANK')
+    acts += `<button class="btn btn-primary" onclick="acceptOrder('${id}', this)">Принять</button>`;
+  if (o.status === 'ACCEPTED_BY_MERCHANT' && o.isKaspiDelivery && !o.waybill)
+    acts += `
+      <div class="row" style="flex-basis:100%">
+        <input type="number" id="spaces-${id}" value="1" min="1" max="50" inputmode="numeric" title="Мест (коробок)" style="flex:0 0 70px" />
+        <button class="btn btn-primary" onclick="assembleOrder('${id}', this)">Накладная</button>
+      </div>`;
+  if (o.waybill) acts += `<button class="btn btn-secondary" onclick="openWaybill('${id}')">Накладная PDF</button>`;
+  acts += `<button class="btn btn-secondary" onclick="orderItems('${id}', this)">Состав</button>`;
+  return `
+    <div class="icard" data-id="${id}">
+      <div class="op-row">
+        <span class="title">№ ${esc(o.code)}</span>
+        <span class="op-amount">${esc(money(o.totalPrice))}</span>
+      </div>
+      <div><span class="chip ${cls}">${esc(label)}</span>${o.preOrder ? ' <span class="chip">предзаказ</span>' : ''}${
+        o.isKaspiDelivery ? ' <span class="chip">Kaspi Доставка</span>' : ''
+      }</div>
+      <div class="sub">${esc(dateTime(o.creationDate))}</div>
+      ${o.customer?.name ? `<div>👤 ${esc(o.customer.name)}</div>` : ''}
+      ${o.customer?.phone ? `<div class="sub">📞 ${esc(o.customer.phone)}</div>` : ''}
+      ${o.address ? `<div class="sub">📍 ${esc(o.address)}</div>` : ''}
+      ${
+        o.courierTransmissionPlanningDate
+          ? `<div class="sub">🚚 передача курьеру ${esc(dateTime(o.courierTransmissionPlanningDate))}</div>`
+          : ''
+      }
+      <div class="items" id="items-${id}" hidden></div>
+      <div class="acts">${acts}</div>
+      <div id="omsg-${id}" class="hidden"></div>
+    </div>`;
+};
+
+const orderMatches = (o, q) =>
+  !q ||
+  [o.code, o.customer?.name, o.customer?.phone, o.address, o.status]
+    .filter(Boolean)
+    .some((v) => String(v).toLowerCase().includes(q));
+
+const filterOrders = () => {
+  const q = $('orderSearch').value.trim().toLowerCase();
+  const shown = orders.filter((o) => orderMatches(o, q));
+  $('ordersList').innerHTML = shown.length
+    ? shown.map(orderCard).join('')
+    : `<p class="muted">${orders.length ? 'Ничего не найдено. Enter — искать номер среди всех заказов' : 'Заказов нет'}</p>`;
+  $('ordersCount').textContent = orders.length ? `Показано ${shown.length} из ${orders.length}` : '';
+};
 
 const loadOrders = async () => {
   const list = $('ordersList');
-  list.innerHTML = '<p class="muted" style="text-align:center">Загрузка…</p>';
+  list.innerHTML = '<p class="muted">Загрузка…</p>';
   try {
     const r = await api(`/api/market/orders?state=${encodeURIComponent($('orderState').value)}&size=100`);
-    if (!r.orders.length) {
-      list.innerHTML = '<p class="muted" style="text-align:center">Заказов нет</p>';
-      return;
-    }
-    list.innerHTML = r.orders.map(orderRow).join('');
-    list.querySelectorAll('.op-item').forEach((el) => el.addEventListener('click', () => openOrder(el.dataset.id)));
+    orders = r.orders;
+    filterOrders();
   } catch (e) {
     list.innerHTML = `<div class="status-bar status-err">${esc(e.message)}</div>`;
   }
 };
 
-const renderOrder = ({ order, entries }) => {
-  currentOrder = order;
-  $('orderDetailCode').textContent = `№ ${order.code}`;
-  const rows = [
-    ['Статус', order.status],
-    ['Состояние', order.state],
-    ['Сумма', money(order.totalPrice)],
-    ['Создан', dateTime(order.creationDate)],
-    ['Покупатель', order.customer?.name],
-    ['Телефон', order.customer?.phone],
-    ['Адрес', order.address],
-    ['Передача курьеру', dateTime(order.courierTransmissionPlanningDate)],
-  ];
-  const items = entries
-    .map(
-      (e) => `
-    <div class="op-item">
-      <div class="op-row"><span class="op-name">${esc(e.name)}</span><span>${esc(e.quantity)} шт</span></div>
-      <div class="op-date">арт. ${esc(e.sku)} · ${esc(money(e.basePrice))}
-        ${e.cardId ? ` · <a href="#" data-card="${esc(e.cardId)}">конкуренты</a>` : ''}</div>
-    </div>`,
-    )
-    .join('');
-  $('orderDetailContent').innerHTML =
-    rows
-      .filter(([, v]) => v)
-      .map(
-        ([k, v]) =>
-          `<div class="detail-row"><span class="detail-label">${esc(k)}</span><span class="detail-value">${esc(v)}</span></div>`,
-      )
-      .join('') + `<h2 style="margin-top:12px">Состав</h2>${items}`;
-  $('orderDetailContent')
-    .querySelectorAll('a[data-card]')
-    .forEach((a) =>
-      a.addEventListener('click', (ev) => {
-        ev.preventDefault();
-        $('cardId').value = a.dataset.card;
-        switchTab('competitors');
-        loadCompetitors();
-      }),
-    );
-
-  let actions = '';
-  if (order.status === 'APPROVED_BY_BANK') {
-    actions += '<button class="btn btn-primary" onclick="acceptOrder()">Принять заказ</button>';
-  }
-  if (order.status === 'ACCEPTED_BY_MERCHANT' && order.isKaspiDelivery) {
-    actions += `
-      <label>Мест (коробок)</label>
-      <input type="number" id="numberOfSpace" value="1" min="1" max="50" inputmode="numeric" />
-      <button class="btn btn-primary" onclick="assembleOrder()">Сформировать накладную</button>`;
-  }
-  if (order.waybill) {
-    actions += '<button class="btn btn-secondary" onclick="openWaybill()">Открыть накладную (PDF)</button>';
-  }
-  $('orderActions').innerHTML = actions;
-  showMsg('orderMsg', '', '');
-  $('orderDetail').classList.remove('hidden');
-};
-
-const openOrder = async (id) => {
-  try {
-    renderOrder(await api(`/api/market/orders/${encodeURIComponent(id)}`));
-  } catch (e) {
-    alert(e.message);
-  }
-};
-
+// Enter в поиске: номер заказа ищем по всем заказам, не только в текущем списке
 const findOrder = async () => {
-  const code = $('orderCode').value.trim();
-  if (!code) return;
+  const code = $('orderSearch').value.trim();
+  if (!/^\d{5,}$/.test(code) || orders.some((o) => String(o.code) === code)) return;
   try {
-    renderOrder(await api(`/api/market/orders/by-code/${encodeURIComponent(code)}`));
+    const r = await api(`/api/market/orders/by-code/${encodeURIComponent(code)}`);
+    orders = [r.order, ...orders.filter((o) => o.id !== r.order.id)];
+    filterOrders();
   } catch (e) {
-    alert(e.message);
+    $('ordersCount').textContent = e.message;
   }
 };
 
-const acceptOrder = async () => {
+// Обновить одну карточку после действия
+const refreshOrder = async (id) => {
+  const r = await api(`/api/market/orders/${encodeURIComponent(id)}`);
+  orders = orders.map((o) => (o.id === id ? r.order : o));
+  filterOrders();
+  return r;
+};
+
+const orderItems = async (id, btn) => {
+  const box = $(`items-${id}`);
+  if (!box.hidden) {
+    box.hidden = true;
+    return;
+  }
+  btn.disabled = true;
   try {
-    await post(`/api/market/orders/${encodeURIComponent(currentOrder.id)}/accept`);
-    showMsg('orderMsg', 'Заказ принят', 'ok');
-    openOrder(currentOrder.id);
+    const { entries } = await api(`/api/market/orders/${encodeURIComponent(id)}`);
+    box.innerHTML = entries
+      .map(
+        (e) => `
+      <div style="margin:4px 0">
+        <div>${esc(e.name)} — <b>${esc(e.quantity)} шт</b></div>
+        <div class="sub">арт. ${esc(e.sku)} · ${esc(money(e.basePrice))}${
+          e.cardId ? ` · <a href="#" onclick="openCompetitors('${esc(e.cardId)}');return false">конкуренты</a>` : ''
+        }</div>
+      </div>`,
+      )
+      .join('');
+    box.hidden = false;
   } catch (e) {
-    showMsg('orderMsg', e.message, 'err');
+    showMsg(`omsg-${id}`, e.message, 'err');
+  } finally {
+    btn.disabled = false;
   }
 };
 
-const assembleOrder = async () => {
-  const n = Number($('numberOfSpace').value) || 1;
+const openCompetitors = (cardId) => {
+  $('cardId').value = cardId;
+  switchTab('competitors');
+  loadCompetitors();
+};
+
+const acceptOrder = async (id, btn) => {
+  btn.disabled = true;
   try {
-    await post(`/api/market/orders/${encodeURIComponent(currentOrder.id)}/assemble`, { numberOfSpace: n });
-    showMsg('orderMsg', 'Накладная формируется. Обновите заказ через минуту.', 'ok');
+    await post(`/api/market/orders/${encodeURIComponent(id)}/accept`);
+    await refreshOrder(id);
+    showMsg(`omsg-${id}`, 'Заказ принят', 'ok');
   } catch (e) {
-    showMsg('orderMsg', e.message, 'err');
+    showMsg(`omsg-${id}`, e.message, 'err');
+    btn.disabled = false;
   }
 };
 
-const openWaybill = async () => {
+const assembleOrder = async (id, btn) => {
+  const n = Number($(`spaces-${id}`).value) || 1;
+  btn.disabled = true;
   try {
-    const resp = await fetch(`/api/market/orders/${encodeURIComponent(currentOrder.id)}/waybill`, {
-      headers: authHeaders(),
-    });
+    await post(`/api/market/orders/${encodeURIComponent(id)}/assemble`, { numberOfSpace: n });
+    showMsg(`omsg-${id}`, 'Накладная формируется. Обновите список через минуту.', 'ok');
+  } catch (e) {
+    showMsg(`omsg-${id}`, e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+const openWaybill = async (id) => {
+  try {
+    const resp = await fetch(`/api/market/orders/${encodeURIComponent(id)}/waybill`, { headers: authHeaders() });
     if (!resp.ok) {
       const b = await resp.json().catch(() => ({}));
       throw new Error(b.error || `HTTP ${resp.status}`);
     }
-    const blob = await resp.blob();
-    window.open(URL.createObjectURL(blob), '_blank');
+    window.open(URL.createObjectURL(await resp.blob()), '_blank');
   } catch (e) {
-    showMsg('orderMsg', e.message, 'err');
+    showMsg(`omsg-${id}`, e.message, 'err');
   }
 };
 
-// ═══ Товары (кабинет) ═══
+// ═══ Товары (кабинет) — открытые карточки ═══
+//
+// Каждый товар сразу редактируется на своей карточке: цена, наличие, остаток и
+// предзаказ по точкам. Сохраняется только эта карточка.
 
 let offers = [];
-let offersPage = 0;
-let editing = null;
+let offersLoaded = false;
+let offerSearchTimer = null;
 const OFFERS_LIMIT = 50;
+
+// Номер карточки на витрине — последнее число в ссылке …-123456789/
+const cardIdOf = (o) => String(o.cardUrl || '').match(/(\d{5,})\/?(?:\?.*)?$/)?.[1] || null;
+
+const offerCard = (o, i) => {
+  const cardId = cardIdOf(o);
+  const img = /^https?:\/\//.test(o.image || '') ? `<img src="${esc(o.image)}" alt="" loading="lazy" />` : '';
+  const points = o.points
+    .map(
+      (p, j) => `
+      <div class="point">
+        <div class="op-row">
+          <b style="font-size:13px">${esc(p.storeId)}</b>
+          <label style="margin:0;display:flex;gap:4px;align-items:center;color:#333">
+            <input type="checkbox" id="ptAvail${i}_${j}" ${p.available ? 'checked' : ''} style="width:auto" /> в наличии
+          </label>
+        </div>
+        <div class="row">
+          <div><label>Остаток</label><input type="number" id="ptStock${i}_${j}" min="0" value="${esc(p.stockCount ?? '')}" /></div>
+          <div><label>Предзаказ, дн.</label><input type="number" id="ptPre${i}_${j}" min="0" max="30" value="${esc(p.preorder ?? '')}" /></div>
+        </div>
+      </div>`,
+    )
+    .join('');
+  return `
+    <div class="icard">
+      <div class="head">
+        ${img}
+        <div style="min-width:0">
+          <div class="title">${esc(o.name || 'Без названия')}</div>
+          <div class="sub">арт. ${esc(o.sku || '—')}${o.brand ? ` · ${esc(o.brand)}` : ''}</div>
+          <div style="margin-top:4px"><span class="chip ${o.available ? 'ok' : 'no'}">${
+            o.available ? 'в наличии' : 'нет в наличии'
+          }</span>${o.stock !== null ? ` <span class="chip">остаток ${esc(o.stock)}</span>` : ''}</div>
+        </div>
+      </div>
+      <label>Цена, ₸</label>
+      <input type="number" id="offerPrice${i}" min="1" inputmode="numeric" value="${esc(o.price ?? '')}" />
+      ${points}
+      <div class="acts">
+        <button class="btn btn-primary" onclick="saveOffer(${i}, this)">Сохранить</button>
+        ${cardId ? `<button class="btn btn-secondary" onclick="offerReprice(${i})">Конкуренты</button>` : ''}
+      </div>
+      ${o.cardUrl ? `<a class="sub" href="${esc(o.cardUrl)}" target="_blank" rel="noopener">Открыть на Kaspi ↗</a>` : ''}
+      <div id="offerMsg${i}" class="hidden"></div>
+    </div>`;
+};
 
 const loadOffers = async (page = 0) => {
   const list = $('offersList');
-  list.innerHTML = '<p class="muted" style="text-align:center">Загрузка…</p>';
+  if (!getState().mcSession) {
+    list.innerHTML = '<p class="muted">Войдите в кабинет продавца — товары появятся здесь</p>';
+    return;
+  }
+  list.innerHTML = '<p class="muted">Загрузка…</p>';
   try {
     const q = encodeURIComponent($('offerQuery').value.trim());
     const r = await api(`/api/market/offers?q=${q}&page=${page}&limit=${OFFERS_LIMIT}`);
     offers = r.offers;
-    offersPage = page;
-    list.innerHTML = offers.length
-      ? offers
-          .map(
-            (o, i) => `
-        <div class="op-item" data-i="${i}">
-          <div class="op-row"><span class="op-name">${esc(o.name)}</span><span class="op-amount">${esc(money(o.price))}</span></div>
-          <div class="op-date">арт. ${esc(o.sku)} · ${o.available ? 'в наличии' : 'нет в наличии'}${
-            o.stock !== null ? ` · остаток ${esc(o.stock)}` : ''
-          }</div>
-        </div>`,
-          )
-          .join('')
-      : '<p class="muted" style="text-align:center">Ничего не найдено</p>';
-    list
-      .querySelectorAll('.op-item')
-      .forEach((el) => el.addEventListener('click', () => editOffer(Number(el.dataset.i))));
+    offersLoaded = true;
+    list.innerHTML = offers.length ? offers.map(offerCard).join('') : '<p class="muted">Ничего не найдено</p>';
+    $('offersCount').textContent = offers.length
+      ? `Страница ${page + 1} · товаров на странице: ${offers.length}${r.total ? ` из ${r.total}` : ''}`
+      : '';
     $('offersPager').innerHTML =
       (page > 0 ? `<button class="btn btn-secondary" onclick="loadOffers(${page - 1})">← Назад</button>` : '') +
       (offers.length === OFFERS_LIMIT
@@ -446,51 +525,42 @@ const loadOffers = async (page = 0) => {
   }
 };
 
-const editOffer = (i) => {
-  editing = offers[i];
-  $('offerEditTitle').textContent = editing.name || 'Товар';
-  $('offerEditSku').textContent = `Артикул ${editing.sku || '—'}`;
-  $('offerPrice').value = editing.price ?? '';
-  $('offerPoints').innerHTML = editing.points
-    .map(
-      (p, j) => `
-    <div class="point">
-      <b>${esc(p.storeId)}</b>
-      <label><input type="checkbox" id="ptAvail${j}" ${p.available ? 'checked' : ''} style="width:auto" /> В наличии</label>
-      <div class="row">
-        <div><label>Остаток</label><input type="number" id="ptStock${j}" min="0" value="${esc(p.stockCount ?? '')}" /></div>
-        <div><label>Предзаказ, дней</label><input type="number" id="ptPre${j}" min="0" max="30" value="${esc(p.preorder ?? '')}" /></div>
-      </div>
-    </div>`,
-    )
-    .join('');
-  showMsg('offerMsg', '', '');
-  $('offerEdit').classList.remove('hidden');
-  $('offerEdit').scrollIntoView({ behavior: 'smooth' });
+// Поиск по мере ввода — с паузой, чтобы не дёргать кабинет на каждую букву
+const offerSearchInput = () => {
+  clearTimeout(offerSearchTimer);
+  offerSearchTimer = setTimeout(() => loadOffers(0), 400);
 };
 
-const saveOffer = async () => {
-  if (!editing) return;
-  const priceRaw = $('offerPrice').value;
-  const body = { sku: editing.sku, model: editing.name };
-  if (priceRaw !== '' && Number(priceRaw) !== Number(editing.price)) body.price = Number(priceRaw);
-  const points = editing.points.map((p, j) => ({
+const saveOffer = async (i, btn) => {
+  const o = offers[i];
+  if (!o) return;
+  const priceRaw = $(`offerPrice${i}`).value;
+  const body = { sku: o.sku, model: o.name };
+  if (priceRaw !== '' && Number(priceRaw) !== Number(o.price)) body.price = Number(priceRaw);
+  const points = o.points.map((p, j) => ({
     storeId: p.storeId,
-    available: $(`ptAvail${j}`).checked,
-    stockCount: $(`ptStock${j}`).value,
-    preorder: $(`ptPre${j}`).value,
+    available: $(`ptAvail${i}_${j}`).checked,
+    stockCount: $(`ptStock${i}_${j}`).value,
+    preorder: $(`ptPre${i}_${j}`).value,
   }));
   if (points.length) body.points = points;
-  const btn = $('btnSaveOffer');
   btn.disabled = true;
   try {
     await post('/api/market/offers/update', body);
-    showMsg('offerMsg', 'Отправлено в Kaspi. Изменения появляются на витрине в течение нескольких минут.', 'ok');
+    if (body.price) o.price = body.price;
+    showMsg(`offerMsg${i}`, 'Отправлено в Kaspi. На витрине обновится за несколько минут.', 'ok');
   } catch (e) {
-    showMsg('offerMsg', e.message, 'err');
+    showMsg(`offerMsg${i}`, e.message, 'err');
   } finally {
     btn.disabled = false;
   }
+};
+
+// С карточки товара — сразу в конкуренты и демпинг, артикул подставлен
+const offerReprice = (i) => {
+  const o = offers[i];
+  $('repriceSku').value = o.sku || '';
+  openCompetitors(cardIdOf(o));
 };
 
 // ═══ Конкуренты ═══
@@ -748,31 +818,63 @@ const smsRun = async () => {
   }
 };
 
-const SMS_STATUS = {
-  sent: ['Отправлено', 'badge-paid'],
-  failed: ['Не ушло', 'badge-canceled'],
-  skipped: ['Пропущено', 'badge-expired'],
-};
-const SMS_EVENT = { new: 'Принят', issued: 'Выдан' };
+const SMS_EVENT = { new: 'Заказ принят', issued: 'Заказ выдан' };
+const SMS_STATUS = { sent: 'отправлено', failed: 'не ушло', skipped: 'пропущено' };
+
+let smsLog = [];
 
 const renderSmsLog = (log) => {
-  if (!log || !log.length)
-    return ($('smsLog').innerHTML = '<p class="muted" style="text-align:center">Пока ничего не отправлялось</p>');
-  $('smsLog').innerHTML = log
-    .map((r) => {
-      const [label, cls] = SMS_STATUS[r.status] || SMS_STATUS.skipped;
-      return `
-      <div class="op-item">
-        <div class="op-row">
-          <span class="op-name">№ ${esc(r.orderCode)} · ${esc(SMS_EVENT[r.event] || r.event)}</span>
-          <span class="badge ${cls}">${esc(label)}</span>
-        </div>
-        <div class="op-date">${esc(r.phone)}${r.text ? ` · ${esc(r.text)}` : ''}</div>
-        ${r.error ? `<div class="op-date" style="color:#c62828">${esc(r.error)}</div>` : ''}
-        <div class="op-date">${esc(dateTime(r.at))}</div>
-      </div>`;
-    })
-    .join('');
+  smsLog = log || [];
+  renderChats();
+};
+
+// Журнал → «чаты»: одна открытая карточка на заказ, внутри все сообщения
+const renderChats = () => {
+  const q = $('chatSearch').value.trim().toLowerCase();
+  const byOrder = new Map();
+  for (const r of smsLog) {
+    const key = String(r.orderCode);
+    if (!byOrder.has(key)) byOrder.set(key, { code: key, phone: r.phone, msgs: [] });
+    byOrder.get(key).msgs.push(r);
+  }
+  const chats = [...byOrder.values()].filter(
+    (c) =>
+      !q ||
+      c.code.includes(q) ||
+      String(c.phone || '')
+        .toLowerCase()
+        .includes(q) ||
+      c.msgs.some((m) =>
+        String(m.text || '')
+          .toLowerCase()
+          .includes(q),
+      ),
+  );
+  $('chatsCount').textContent = byOrder.size ? `Чатов: ${chats.length} из ${byOrder.size}` : '';
+  $('smsLog').innerHTML = chats.length
+    ? chats
+        .map(
+          (c) => `
+      <div class="icard">
+        <div class="op-row"><span class="title">№ ${esc(c.code)}</span><span class="sub">${esc(c.phone || '')}</span></div>
+        ${c.msgs
+          .slice()
+          .reverse()
+          .map(
+            (m) => `
+          <div class="bubble ${m.status === 'failed' ? 'failed' : ''}">
+            ${esc(m.text || SMS_EVENT[m.event] || m.event)}
+            <div class="meta">${esc(SMS_EVENT[m.event] || m.event)} · ${esc(dateTime(m.at))} · ${esc(
+              SMS_STATUS[m.status] || m.status,
+            )}</div>
+            ${m.error ? `<div class="meta" style="color:#c62828">${esc(m.error)}</div>` : ''}
+          </div>`,
+          )
+          .join('')}
+      </div>`,
+        )
+        .join('')
+    : `<p class="muted">${smsLog.length ? 'Ничего не найдено' : 'Пока ничего не отправлялось'}</p>`;
 };
 
 // Диагностика чата Kaspi: найти адрес чата по сессии кабинета (ничего не шлёт)
