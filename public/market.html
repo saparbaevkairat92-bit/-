@@ -614,6 +614,11 @@
             <button class="b red" onclick="saveMessages()">Сохранить</button>
             <button class="b" onclick="runMessages()">Проверить заказы сейчас</button>
           </div>
+          <label>Пробное SMS на свой номер</label>
+          <div class="bar">
+            <input type="search" id="mTestPhone" placeholder="+7 701 234 56 78" />
+            <button class="b" onclick="smsTest('mTestPhone')">Отправить пробное</button>
+          </div>
         </div>
 
         <h2 style="font-size: 16px; margin: 6px 0 10px">Рассылка по карточкам</h2>

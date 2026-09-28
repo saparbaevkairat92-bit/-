@@ -145,7 +145,21 @@ const fakeKaspi = (req, res) => {
     }
     if (u.pathname === '/api/orders') {
       const st = u.searchParams.get('filter[orders][state]');
+      // Как у живого Kaspi: одно из состояний может отказать — остальные должны показаться
+      if (st === 'SIGN_REQUIRED') {
+        res.statusCode = 400;
+        return res.end(JSON.stringify({ errors: [{ title: 'bad state' }] }));
+      }
       return res.end(JSON.stringify({ data: u.searchParams.get('page[number]') === '0' ? ORDERS[st] || [] : [] }));
+    }
+    if (u.pathname === '/api/orders/o2/entries') {
+      // Позиция без offer — артикул только через masterproducts
+      return res.end(
+        JSON.stringify({ data: [{ attributes: { quantity: 2 }, relationships: { product: { data: { id: 'M9' } } } }] }),
+      );
+    }
+    if (u.pathname === '/api/masterproducts/M9/merchantProduct') {
+      return res.end(JSON.stringify({ data: { attributes: { code: 'N1', name: 'Наушники из мастер-карточки' } } }));
     }
     if (/\/api\/orders\/o\d\/entries/.test(u.pathname)) {
       return res.end(
@@ -264,6 +278,17 @@ describe('/api/market/shop', () => {
     // У кабеля кабинет не отдал номер карточки — он пришёл из заказа
     const k2 = await call('GET', '/api/market/shop/cards?q=K2');
     assert.equal(k2.body.cards[0].cardId, '200002');
+  });
+
+  it('состояние, которое Kaspi не отдал, не ломает заказы; артикул — через masterproducts', async () => {
+    const r = await call('GET', '/api/market/shop/orders?tab=transfer&refresh=1', null, tok);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.orders[0].code, '222');
+    assert.match(r.body.warnings.join(' '), /SIGN_REQUIRED/);
+    const it0 = r.body.orders[0].items[0];
+    assert.equal(it0.sku, 'N1');
+    assert.equal(it0.name, 'Наушники из мастер-карточки');
+    assert.equal(it0.image, 'https://img/n1.jpg');
   });
 
   it('номер карточки можно вписать вручную ссылкой', async () => {

@@ -267,6 +267,9 @@ const loadOrders = async (refresh = false) => {
     const q = encodeURIComponent($('orderQ').value.trim());
     ordersData = await api(`/api/market/shop/orders?tab=${orderTab}&q=${q}${refresh ? '&refresh=1' : ''}`);
     renderOrders();
+    $('ordersWarn').innerHTML = ordersData.warnings?.length
+      ? note(`Не все заказы загрузились — ${esc(ordersData.warnings.join('; '))}. Нажмите «Обновить».`)
+      : '';
   } catch (e) {
     $('ordersWarn').innerHTML = note(esc(e.message), 'err');
   }
@@ -893,10 +896,16 @@ const runMessages = () =>
   busy(null, async () => {
     const r = await post('/api/market/sms/run');
     renderMsgLog(r.log);
-    toast(
-      r.sent || r.failed ? `Отправлено ${r.sent}, не ушло ${r.failed}` : 'Новых заказов для сообщений нет',
-      r.failed > 0,
-    );
+    const parts = [];
+    if (r.sent || r.failed) parts.push(`Отправлено ${r.sent}, не ушло ${r.failed}`);
+    if (r.skipped) parts.push(`пропущено ${r.skipped}`);
+    if (!r.sent && !r.failed) parts.push(r.seen ? 'Новых сообщений нет' : 'Заказов с нужным статусом за 14 дней нет');
+    if (r.older)
+      parts.push(
+        `${r.older} заказ(ов) оформлены до включения рассылки — им не пишем, чтобы не беспокоить старых покупателей`,
+      );
+    if (r.errors?.length) parts.push(`Kaspi: ${r.errors.join('; ')}`);
+    toast(parts.join('. '), r.failed > 0 || !!r.errors?.length);
   });
 
 const probeChat = () =>
@@ -1031,9 +1040,9 @@ const saveSmsService = () =>
     loadSettings();
   });
 
-const smsTest = () =>
+const smsTest = (field = 'smsTestPhone') =>
   busy(null, async () => {
-    const r = await post('/api/market/sms/test', { phone: $('smsTestPhone').value.trim(), event: 'new' });
+    const r = await post('/api/market/sms/test', { phone: $(field).value.trim(), event: 'new' });
     toast(`Отправлено: «${r.text}»`);
   });
 
