@@ -127,7 +127,7 @@ export const normalizeOffer = (o) => {
     brand: o?.brand ?? null,
     category: o?.category ?? o?.categoryName ?? null,
     image: offerImage(o),
-    cardUrl: o?.shopLink ?? o?.productUrl ?? (offerCardId(o) ? `https://kaspi.kz/shop/p/-${offerCardId(o)}/` : null),
+    cardUrl: absoluteCardUrl(o?.shopLink ?? o?.productUrl, offerCardId(o)),
   };
 };
 
@@ -200,6 +200,17 @@ export const offerCardId = (o) => {
   if (m) return m[1];
   const any = o ? JSON.stringify(o).match(CARD_LINK) : null;
   return any ? any[1] : null;
+};
+
+// Ссылка на товар — всегда полная. Кабинет отдаёт её без домена
+// («/shop/p/…»), и в браузере она открывалась на адресе нашего сервера.
+export const absoluteCardUrl = (url, cardId) => {
+  const u = String(url || '').trim();
+  if (/^https?:\/\//.test(u)) return u;
+  if (u.startsWith('//')) return `https:${u}`;
+  if (u.startsWith('/')) return `https://kaspi.kz${u}`;
+  if (u.includes('kaspi.kz')) return `https://${u.replace(/^\/+/, '')}`;
+  return cardId ? `https://kaspi.kz/shop/p/-${cardId}/` : null;
 };
 
 // Номер карточки из того, что вставил человек: число или ссылка на товар Kaspi

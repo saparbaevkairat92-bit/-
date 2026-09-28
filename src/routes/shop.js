@@ -2,7 +2,14 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import * as merchantApi from '../marketplace/merchantApi.js';
 import * as cabinet from '../marketplace/cabinet.js';
-import { normalizeOrder, normalizeEntry, normalizeOffer, parseCardId, ORDER_TABS } from '../marketplace/normalize.js';
+import {
+  normalizeOrder,
+  normalizeEntry,
+  normalizeOffer,
+  parseCardId,
+  absoluteCardUrl,
+  ORDER_TABS,
+} from '../marketplace/normalize.js';
 import { ShopError, orderFee, defaultFloor, cardStep, cardFloor } from '../marketplace/shop.js';
 import * as store from '../marketplace/shopStore.js';
 import * as smsStore from '../marketplace/autoSmsStore.js';
@@ -48,6 +55,8 @@ const shopFail = (res, err) => {
 
 const publicCard = (settings, c) => ({
   ...c,
+  // В хранилище могла остаться ссылка без домена — отдаём всегда полную
+  cardUrl: absoluteCardUrl(c.cardUrl, c.cardId),
   floorEffective: cardFloor(settings, c),
   stepEffective: cardStep(settings, c),
 });
@@ -462,7 +471,7 @@ router.get('/orders', requireToken, async (req, res) => {
         customer: o.customer ? { name: o.customer.name } : null, // телефон покупателя в список не отдаём
         items: (entries[o.id] || []).map((e) => {
           const c = e.sku ? store.getCard(e.sku) : null;
-          return { ...e, image: c?.image || null, cardUrl: c?.cardUrl || null };
+          return { ...e, image: c?.image || null, cardUrl: c ? absoluteCardUrl(c.cardUrl, c.cardId) : null };
         }),
         fee,
         messages: msgs[o.code] || {},
