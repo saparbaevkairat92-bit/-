@@ -639,6 +639,25 @@ const renderSmsLog = (log) => {
     .join('');
 };
 
+// Диагностика чата Kaspi: найти адрес чата по сессии кабинета (ничего не шлёт)
+const discoverChat = async () => {
+  if (!getState().mcSession) {
+    $('discoverOut').value = 'Сначала войдите в кабинет по телефону (карточка «Кабинет продавца» выше).';
+    return;
+  }
+  const btn = $('btnDiscoverChat');
+  btn.disabled = true;
+  $('discoverOut').value = 'Читаем код кабинета Kaspi… (10–30 сек)';
+  try {
+    const r = await api('/api/market/cabinet/discover-chat');
+    $('discoverOut').value = JSON.stringify(r, null, 2);
+  } catch (e) {
+    $('discoverOut').value = `Ошибка: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
 window.addEventListener('DOMContentLoaded', () => {
   renderConnections();
   if (getState().marketToken) loadOrders();

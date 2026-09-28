@@ -8,6 +8,7 @@ import { diagnose } from '../marketplace/loginHelpers.js';
 import * as customerSms from '../marketplace/customerSms.js';
 import * as smsStore from '../marketplace/autoSmsStore.js';
 import { runOnce as smsRunOnce, sendTest as smsSendTest } from '../marketplace/autoSmsPoller.js';
+import { discoverChat } from '../marketplace/chatDiscover.js';
 
 // ═══════════════════════════════════════════════════
 //  Kaspi Маркетплейс — /api/market/*
@@ -405,6 +406,16 @@ router.post('/sms/run', async (req, res) => {
     res.json({ ...stats, log: smsStore.recentLog() });
   } catch (err) {
     res.status(502).json({ error: `Не удалось опросить заказы: ${err.message}` });
+  }
+});
+
+// Диагностика: найти адрес чата кабинета (только чтение, ничего не отправляет).
+// Нужна, чтобы точно реализовать авто-сообщения в чат Kaspi, а не угадывать.
+router.get('/cabinet/discover-chat', requireCabinet, async (req, res) => {
+  try {
+    res.json(await discoverChat(req.cabinet.jar));
+  } catch (err) {
+    fail(res, err);
   }
 });
 

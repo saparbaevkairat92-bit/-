@@ -291,6 +291,26 @@
 
           <h2 style="margin-top: 16px; font-size: 16px">Журнал SMS</h2>
           <div id="smsLog"></div>
+
+          <details style="margin-top: 16px">
+            <summary style="cursor: pointer; font-weight: 600">
+              Отправка через чат Kaspi (вместо SMS) — диагностика
+            </summary>
+            <p class="muted" style="margin-top: 8px">
+              Можно слать сообщения прямо в чат Kaspi, как это делает сотрудник в кабинете — бесплатно, без SMS. Kaspi
+              не описывает этот чат, поэтому сначала находим его адрес по вашей сессии кабинета. Кнопка ниже ничего
+              покупателям не отправляет — только читает код кабинета. Нужно, чтобы кабинет был подключён (вход по
+              телефону выше).
+            </p>
+            <button class="btn btn-secondary" id="btnDiscoverChat" onclick="discoverChat()">Найти чат Kaspi</button>
+            <p class="muted" style="margin-top: 6px">Результат скопируйте и пришлите разработчику:</p>
+            <textarea
+              id="discoverOut"
+              rows="6"
+              style="width: 100%; font-family: monospace; font-size: 11px"
+              readonly
+            ></textarea>
+          </details>
         </div>
       </div>
 
