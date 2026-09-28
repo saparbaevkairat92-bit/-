@@ -113,6 +113,16 @@ export const getOrder = async (auth, orderId) => {
   return data?.data || null;
 };
 
+// Артикул продавца по товару из позиции заказа. В позиции Kaspi не всегда
+// присылает offer.code — тогда, как в рабочей сверке NS WMS, спрашиваем
+// /masterproducts/{id}/merchantProduct
+export const getMerchantProduct = async (auth, masterId) => {
+  const data = await request(auth, 'GET', `/masterproducts/${encodeURIComponent(masterId)}/merchantProduct`);
+  const item = Array.isArray(data?.data) ? data.data[0] : data?.data;
+  const a = item?.attributes || {};
+  return { code: a.code ? String(a.code) : null, name: a.name || null };
+};
+
 export const getOrderEntries = async (auth, orderId) => {
   const data = await request(auth, 'GET', `/orders/${encodeURIComponent(orderId)}/entries`);
   return data?.data || [];

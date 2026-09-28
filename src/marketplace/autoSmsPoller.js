@@ -55,7 +55,7 @@ const orderCards = async (auth, order, fetchEntries) => {
 export const runOnce = async ({ fetchOrders, fetchEntries } = {}) => {
   const st = store.getState();
   const cfg = st.config;
-  const stats = { sent: 0, failed: 0, skipped: 0 };
+  const stats = { sent: 0, failed: 0, skipped: 0, older: 0, seen: 0 };
   if (!cfg.enabled || !st.marketToken) return stats;
   const auth = unsealToken(st.marketToken);
   if (!auth || !auth.token) return stats;
@@ -73,6 +73,7 @@ export const runOnce = async ({ fetchOrders, fetchEntries } = {}) => {
         orders = res.orders || [];
       } catch (err) {
         console.warn(`[autosms] заказы ${status}: ${err.message}`);
+        (stats.errors ||= []).push(`${status}: ${err.message}`);
         continue;
       }
       for (const order of orders) {
@@ -81,7 +82,11 @@ export const runOnce = async ({ fetchOrders, fetchEntries } = {}) => {
         if (!code || seen.has(code)) continue;
         seen.add(code);
         // Только заказы после включения рассылки
-        if (cfg.enabledAtMs && Number(attrs.creationDate) && Number(attrs.creationDate) < cfg.enabledAtMs) continue;
+        stats.seen += 1;
+        if (cfg.enabledAtMs && Number(attrs.creationDate) && Number(attrs.creationDate) < cfg.enabledAtMs) {
+          stats.older += 1;
+          continue;
+        }
         if (store.alreadySent(code, event)) continue;
         const pick = pickTemplate(
           await orderCards({ token: auth.token, merchantUid }, order, fetchEntries),

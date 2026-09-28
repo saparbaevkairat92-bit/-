@@ -324,45 +324,81 @@ const entriesCache = new Map();
 
 const tokenKey = (auth) => crypto.createHash('sha256').update(String(auth.token)).digest('hex').slice(0, 16);
 
+// Состояния — по очереди, как в рабочей сверке NS WMS: Kaspi не любит
+// пачку параллельных запросов одним токеном. Сбой одного состояния не
+// ломает остальные — заказы показываем, а что не загрузилось, пишем.
 const fetchStates = async (auth, states) => {
-  const out = [];
-  await Promise.all(
-    states.map(async (state) => {
-      for (let page = 0; page < 10; page++) {
-        const { orders } = await merchantApi.listOrders(auth, { state, page, size: 100 });
-        out.push(...orders);
-        if (orders.length < 100) break;
+  const items = [];
+  const errors = [];
+  for (const state of states) {
+    try {
+      for (let page = 0; page < 20; page++) {
+        const { orders, meta } = await merchantApi.listOrders(auth, { state, page, size: 100 });
+        items.push(...orders);
+        const pages = Number(meta?.pageCount ?? meta?.totalPages);
+        if (orders.length < 100 || (Number.isFinite(pages) && page + 1 >= pages)) break;
       }
-    }),
-  );
-  return out;
+    } catch (err) {
+      errors.push(`${state}: ${err.message}`);
+    }
+  }
+  if (errors.length === states.length) throw new Error(`Kaspi не отдал заказы — ${errors.join('; ')}`);
+  return { items, errors };
 };
 
 const cachedOrders = async (auth, archive, refresh) => {
   const key = `${tokenKey(auth)}:${archive ? 'a' : 'o'}`;
   const hit = ordersCache.get(key);
-  if (hit && !refresh && Date.now() - hit.at < (archive ? ARCHIVE_TTL : ORDERS_TTL)) return hit.items;
-  const items = await fetchStates(auth, archive ? ['ARCHIVE'] : ACTIVE_STATES);
-  ordersCache.set(key, { at: Date.now(), items });
-  return items;
+  if (hit && !refresh && Date.now() - hit.at < (archive ? ARCHIVE_TTL : ORDERS_TTL)) return hit.data;
+  const data = await fetchStates(auth, archive ? ['ARCHIVE'] : ACTIVE_STATES);
+  // Частичный ответ не кэшируем надолго — следующий заход попробует снова
+  ordersCache.set(key, { at: data.errors.length ? Date.now() - ORDERS_TTL + 10_000 : Date.now(), data });
+  return data;
 };
 
 export const forgetOrders = () => ordersCache.clear();
 
+const productCache = new Map();
+
+// Позиция без артикула/названия — дотягиваем товар отдельным запросом
+const fillEntry = async (auth, raw) => {
+  const e = normalizeEntry(raw);
+  const masterId = raw?.relationships?.product?.data?.id;
+  if ((!e.sku || !e.name) && masterId) {
+    if (!productCache.has(masterId)) {
+      try {
+        productCache.set(masterId, await merchantApi.getMerchantProduct(auth, masterId));
+      } catch {
+        productCache.set(masterId, { code: null, name: null });
+      }
+    }
+    const p = productCache.get(masterId);
+    e.sku = e.sku || p.code;
+    e.name = e.name || p.name;
+  }
+  if (!e.name && e.sku) e.name = store.getCard(e.sku)?.name || null;
+  return e;
+};
+
+// Состав заказов — по три за раз (Kaspi ограничивает частоту запросов)
 const entriesFor = async (auth, ids) => {
   const need = ids.filter((id) => !entriesCache.has(id));
-  for (let i = 0; i < need.length; i += 6) {
+  for (let i = 0; i < need.length; i += 3) {
     await Promise.all(
-      need.slice(i, i + 6).map(async (id) => {
+      need.slice(i, i + 3).map(async (id) => {
         try {
-          entriesCache.set(id, (await merchantApi.getOrderEntries(auth, id)).map(normalizeEntry));
+          const raw = await merchantApi.getOrderEntries(auth, id);
+          const list = [];
+          for (const r of raw) list.push(await fillEntry(auth, r));
+          entriesCache.set(id, list);
         } catch {
-          /* состав не загрузился — покажем без него */
+          /* состав не загрузился — покажем без него, попробуем в следующий раз */
         }
       }),
     );
   }
   if (entriesCache.size > 5000) for (const k of [...entriesCache.keys()].slice(0, 2500)) entriesCache.delete(k);
+  if (productCache.size > 5000) productCache.clear();
   return Object.fromEntries(ids.map((id) => [id, entriesCache.get(id) || []]));
 };
 
@@ -370,10 +406,17 @@ router.get('/orders', requireToken, async (req, res) => {
   const tab = ORDER_TABS.includes(req.query.tab) ? req.query.tab : 'packing';
   const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
   try {
-    const raw = [
-      ...(await cachedOrders(req.market, false, refresh)),
-      ...(await cachedOrders(req.market, true, refresh && tab === 'archive')),
-    ];
+    const active = await cachedOrders(req.market, false, refresh);
+    // Архив не нужен для рабочих вкладок — если он не загрузился, остальное не страдает
+    let archive = { items: [], errors: [] };
+    try {
+      archive = await cachedOrders(req.market, true, refresh && tab === 'archive');
+    } catch (err) {
+      if (tab === 'archive') throw err;
+      archive.errors.push(`ARCHIVE: ${err.message}`);
+    }
+    const raw = [...active.items, ...archive.items];
+    const warnings = [...active.errors, ...archive.errors];
     const seen = new Set();
     const orders = raw.map(normalizeOrder).filter((o) => o.code && !seen.has(o.code) && seen.add(o.code));
     const counts = Object.fromEntries(ORDER_TABS.map((t) => [t, orders.filter((o) => o.tab === t).length]));
@@ -430,6 +473,7 @@ router.get('/orders', requireToken, async (req, res) => {
     res.json({
       tab,
       counts,
+      warnings,
       orders: out,
       summary: {
         count: out.length,
