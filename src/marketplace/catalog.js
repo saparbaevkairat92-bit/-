@@ -56,7 +56,11 @@ const cardOffersPage = async (cardId, page, cityId) => {
       continue;
     }
     if (resp.status === 429) {
-      throw new CatalogError(429, 'Витрина Kaspi блокирует этот сервер (429). Запускайте с обычного IP, не из облака.');
+      throw new CatalogError(
+        429,
+        'Витрина Kaspi блокирует этот сервер (429): облачные адреса (Railway и т.п.) она не пускает. ' +
+          'Запустите сервер с обычного IP или задайте KASPI_PROXY_URL — прокси с обычного адреса.',
+      );
     }
     if (!resp.ok) throw new CatalogError(resp.status, `Витрина Kaspi ответила HTTP ${resp.status}`);
     const data = await resp.json().catch(() => null);

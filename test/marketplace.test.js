@@ -228,3 +228,13 @@ describe('фото и номер карточки — любые поля каб
     assert.equal(parseCardId('abc'), null);
   });
 });
+
+describe('ссылка на товар Kaspi', () => {
+  it('без домена — дописываем kaspi.kz', () => {
+    assert.equal(
+      normalizeOffer({ sku: 'A', shopLink: '/shop/p/krossovki-168687900/' }).cardUrl,
+      'https://kaspi.kz/shop/p/krossovki-168687900/',
+    );
+    assert.equal(normalizeOffer({ sku: 'A', masterSku: '168687900' }).cardUrl, 'https://kaspi.kz/shop/p/-168687900/');
+  });
+});
