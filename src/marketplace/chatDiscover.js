@@ -148,6 +148,68 @@ const extractViteChunks = (text, scriptUrl, root = CABINET_HOME_URL) => {
   return urls;
 };
 
+// ─── Разбор API виджета чата ───
+// В виджете функции API выглядят так:
+//   async function nv(e){return mt.post("/api/v1/messages/sendMessage",{data:e})}
+// Имена минифицированы, поэтому находим имя функции по адресу, а затем места,
+// где её вызывают, — там видно, какие поля уходят в теле. И как устроен клиент
+// mt (baseURL, заголовки, токен). Только чтение кода.
+const CHAT_ENDPOINTS = [
+  '/api/v1/messages/sendMessage',
+  '/api/v1/group/loadGroups/chat',
+  '/api/v1/group/getDiffGroups/chat',
+  '/api/v1/history/loadMoreMessages',
+  '/api/v1/chat/search',
+  '/api/v1/messageStatus/changeStatus',
+];
+
+const reEsc = (v) => v.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+
+const around = (text, i, before, after) => text.slice(Math.max(0, i - before), i + after).replace(/\s+/g, ' ');
+
+const findAll = (text, re, limit) => {
+  const out = [];
+  let m;
+  while ((m = re.exec(text)) !== null && out.length < limit) out.push(m);
+  return out;
+};
+
+export const traceChatApi = (texts) => {
+  const result = { endpoints: {}, client: [], auth: [] };
+  const clients = new Set();
+  for (const text of texts) {
+    for (const path of CHAT_ENDPOINTS) {
+      const def = new RegExp(
+        `(?:async\\s+)?function\\s+([\\w$]+)\\(([\\w$]*)\\)\\{return\\s+([\\w$]+)\\.(post|get)\\(["'\`]${reEsc(path)}`,
+      ).exec(text);
+      if (!def) continue;
+      const [, fn, , client, method] = def;
+      clients.add(client);
+      const calls = findAll(text, new RegExp(`[^\\w$.]${reEsc(fn)}\\(`, 'g'), 12)
+        .filter((m) => Math.abs(m.index - def.index) > 30)
+        .slice(0, 5)
+        .map((m) => around(text, m.index, 500, 400));
+      result.endpoints[path] = { fn, client, method, definition: around(text, def.index, 0, 160), calls };
+    }
+  }
+  for (const text of texts) {
+    for (const c of clients) {
+      // Создание клиента: mt=axios.create({...}) / mt=new X({...})
+      for (const m of findAll(text, new RegExp(`[^\\w$.]${reEsc(c)}=`, 'g'), 3))
+        result.client.push(around(text, m.index, 100, 700));
+      for (const m of findAll(text, new RegExp(`${reEsc(c)}\\.interceptors`, 'g'), 4))
+        result.client.push(around(text, m.index, 100, 600));
+    }
+    for (const needle of ['t_token', 'withCredentials', 'createChat', 'openChatById']) {
+      for (const m of findAll(text, new RegExp(reEsc(needle), 'g'), 3))
+        result.auth.push(around(text, m.index, 250, 350));
+    }
+  }
+  result.client = [...new Set(result.client)].slice(0, 12);
+  result.auth = [...new Set(result.auth)].slice(0, 16);
+  return result;
+};
+
 export const discoverChat = async (jar) => {
   const scanned = [];
   const candidates = new Set();
@@ -258,6 +320,10 @@ export const discoverChat = async (jar) => {
     origin: CABINET_URL,
     scannedScripts: scanned.map(({ url, status, bytes }) => ({ url, status, bytes })),
     sendTextSnippets: [...snippets], // куски кода вокруг sendText — главное
+    // Разбор API виджета: адреса, где вызываются, как устроен клиент и токен
+    chatApi: traceChatApi(
+      scanned.filter((x) => x.text && /chats\/api\/mobile|sendMessage/.test(x.text)).map((x) => x.text),
+    ),
     candidates: list.slice(0, 120),
     errors,
     hint: 'Пришлите разработчику sendTextSnippets и candidates. Сообщения покупателям не отправлялись — только чтение кода.',
