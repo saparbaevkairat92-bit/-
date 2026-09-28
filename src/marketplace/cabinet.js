@@ -50,6 +50,16 @@ const KASPI_ERROR_CODES = {
   CREDENTIALS_INVALID: 'Kaspi: неверный логин или пароль (CREDENTIALS_INVALID)',
 };
 
+// Двухфакторная защита Kaspi (SSO, cookie MS_AUTH_SSO). Пароль уже принят, идёт
+// шаг кода. MFA_SEND_FLOOD — код слишком часто запрашивали, надо подождать
+// (errorData.breakTimeSeconds). errorCode всегда начинается с MFA_.
+const mfaChallenge = (data) => {
+  if (!data || typeof data !== 'object') return null;
+  const code = typeof data.errorCode === 'string' ? data.errorCode : '';
+  if (!code.startsWith('MFA')) return null;
+  return { code, waitSeconds: Number(data.errorData?.breakTimeSeconds) || null };
+};
+
 const errorFromBody = (body, fallback) => {
   if (!body || typeof body !== 'object') return fallback;
   if (body.errorCode && KASPI_ERROR_CODES[body.errorCode]) return KASPI_ERROR_CODES[body.errorCode];
@@ -246,7 +256,27 @@ export const login = async (rawLogin, password) => {
       { diag },
     );
   }
-  if (answers.some((r) => needsSecondFactor(r.data))) {
+  // Двухфакторная защита: пароль принят, Kaspi ждёт код. Даже если это пришло
+  // как MFA_SEND_FLOOD (код запрашивали слишком часто) — вход НЕ провалился,
+  // сессия MFA (cookie MS_AUTH_SSO) уже открыта, и код у человека, скорее всего,
+  // на руках с прошлой отправки. Показываем поле кода, а не ошибку пароля.
+  const mfa = answers.map((r) => mfaChallenge(r.data)).find(Boolean);
+  if (mfa) {
+    const flood = mfa.code === 'MFA_SEND_FLOOD';
+    const wait = mfa.waitSeconds;
+    const msg = flood
+      ? `Kaspi временно ограничил отправку кода${wait ? ` (подождите ${wait} сек)` : ''}. Введите код, который Kaspi уже присылал. Нового кода не будет, пока идёт ограничение.`
+      : 'Kaspi отправил код подтверждения. Введите его ниже.';
+    throw new CabinetError(409, msg, {
+      diag,
+      needCode: true,
+      waitSeconds: wait,
+      // Сессию MFA (jar с MS_AUTH_SSO) храним, чтобы подтвердить код БЕЗ повторной
+      // отправки пароля — иначе Kaspi шлёт новый код и упирается во flood
+      pending: { jar, login: loginId, at: Date.now() },
+    });
+  }
+  if (needsSecondFactor(final.data)) {
     throw new CabinetError(
       409,
       'Kaspi просит подтвердить вход SMS-кодом. Войдите в kaspi.kz/mc в браузере и вставьте cookie — раздел «Вход через браузер» в карточке кабинета.',
@@ -279,19 +309,19 @@ export const login = async (rawLogin, password) => {
       throw new CabinetError(409, 'Kaspi отправил код подтверждения. Введите его ниже.', {
         diag: [...diag, diagnose('магазины', 401, err.body)],
         needCode: true,
-        pending: { jar, login: loginId, password, at: Date.now() },
+        pending: { jar, login: loginId, at: Date.now() },
       });
     }
     throw err;
   }
 };
 
-// ─── Второй шаг: код подтверждения (двухфакторная защита) ───
-// Куда Kaspi принимает код, не документировано. По наблюдаемому поведению вход
-// одношаговый и идёт на тот же адрес, поэтому НЕ перебираем адреса (каждая
-// попытка с настоящим кодом приближает блокировку): делаем ОДИН запрос на тот же
-// /api/p/login — логин, пароль и код вместе, код под несколькими именами полей
-// (Spring лишние молча пропускает). Не подошло — честно отправляем в браузер.
+// ─── Второй шаг: код подтверждения (двухфакторная защита MFA) ───
+// Пароль Kaspi уже принял, сессия MFA держится в cookie (MS_AUTH_SSO из pending).
+// Код подтверждаем ТОЛЬКО кодом, БЕЗ пароля: пароль заново отправлять нельзя —
+// Kaspi на это шлёт новый код и упирается в MFA_SEND_FLOOD. Код без пароля не
+// может запустить новую отправку. Один запрос на тот же адрес; куда именно Kaspi
+// принимает код, не документировано — не подошло, честно отправляем в браузер.
 const CODE_TTL_MS = 10 * 60 * 1000;
 
 export const codeFields = (code) => ({
@@ -299,6 +329,7 @@ export const codeFields = (code) => ({
   otp: code,
   smsCode: code,
   otpCode: code,
+  mfaCode: code,
   verificationCode: code,
   confirmationCode: code,
   _c: code,
@@ -307,11 +338,11 @@ export const codeFields = (code) => ({
 export const confirmCode = async (pending, rawCode) => {
   const code = String(rawCode || '').replace(/\D/g, '');
   if (code.length < 4) throw new CabinetError(400, 'Введите код из SMS или письма (обычно 4–6 цифр)');
-  if (!pending || !pending.jar || !pending.login) {
+  if (!pending || !pending.jar) {
     throw new CabinetError(400, 'Сессия входа не найдена — войдите заново.');
   }
   if (Date.now() - (pending.at || 0) > CODE_TTL_MS) {
-    throw new CabinetError(408, 'Код устарел — войдите заново, чтобы Kaspi прислал новый.');
+    throw new CabinetError(408, 'Сессия входа устарела — войдите заново.');
   }
 
   const loginOrigin = new URL(CABINET_LOGIN_URL).origin;
@@ -322,18 +353,19 @@ export const confirmCode = async (pending, rawCode) => {
     'X-Requested-With': 'XMLHttpRequest',
     ...(xsrf ? { 'X-XSRF-TOKEN': decodeURIComponent(xsrf) } : {}),
   };
-  const r = await call(pending.jar, 'POST', CABINET_LOGIN_URL, {
-    headers,
-    json: { ...loginFields(pending.login, pending.password), ...codeFields(code) },
-  });
+  // Только код — без _u/_p, чтобы не спровоцировать новую отправку кода
+  const r = await call(pending.jar, 'POST', CABINET_LOGIN_URL, { headers, json: codeFields(code) });
   const diag = [diagnose('код', r.status, r.data)];
   console.log('[cabinet] код:', JSON.stringify(diag));
 
   if (!r.ok) {
+    const mfa = mfaChallenge(r.data);
     throw new CabinetError(
       r.status === 400 || r.status === 401 || r.status === 403 ? 401 : 502,
-      errorFromBody(r.data, 'Kaspi не принял код. Проверьте цифры или войдите через браузер.'),
-      { diag, needCode: true, pending: { ...pending, at: pending.at } },
+      mfa && mfa.code === 'MFA_SEND_FLOOD'
+        ? `Kaspi ограничил повторные попытки${mfa.waitSeconds ? ` (подождите ${mfa.waitSeconds} сек)` : ''}. Если код так и не подходит — войдите через браузер.`
+        : errorFromBody(r.data, 'Kaspi не принял код. Проверьте цифры или войдите через браузер.'),
+      { diag, needCode: true, waitSeconds: mfa?.waitSeconds || null, pending: { ...pending } },
     );
   }
 
