@@ -8,6 +8,7 @@ import historyRoutes from './src/routes/history.js';
 import refundRoutes from './src/routes/refund.js';
 import sessionRoutes from './src/routes/session.js';
 import marketRoutes from './src/routes/market.js';
+import shopRoutes from './src/routes/shop.js';
 import { startPolling } from './src/polling.js';
 import { startAutoSmsPolling } from './src/marketplace/autoSmsPoller.js';
 import { startRepricePolling } from './src/marketplace/repricePoller.js';
@@ -26,6 +27,7 @@ app.use('/api/qr', qrRoutes);
 app.use('/api/history', historyRoutes);
 app.use('/api/refund', refundRoutes);
 app.use('/api/session', sessionRoutes);
+app.use('/api/market/shop', shopRoutes);
 app.use('/api/market', marketRoutes);
 
 app.listen(PORT, () => {

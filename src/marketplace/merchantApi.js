@@ -122,7 +122,9 @@ export const getOrderEntries = async (auth, orderId) => {
 const changeStatus = (auth, orderId, attributes) =>
   request(auth, 'POST', '/orders', { body: { data: { type: 'orders', id: String(orderId), attributes } } });
 
-export const acceptOrder = (auth, orderId) => changeStatus(auth, orderId, { status: 'ACCEPTED_BY_MERCHANT' });
+// Kaspi просит в теле и номер заказа (code) — передаём, когда он известен
+export const acceptOrder = (auth, orderId, code) =>
+  changeStatus(auth, orderId, { ...(code ? { code: String(code) } : {}), status: 'ACCEPTED_BY_MERCHANT' });
 
 // Сформировать накладную: numberOfSpace — количество мест (коробок)
 export const assembleOrder = (auth, orderId, numberOfSpace = 1) => {

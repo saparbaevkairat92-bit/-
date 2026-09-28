@@ -1,15 +1,12 @@
 import { Router } from 'express';
-import { encryptSecret, decryptSecret } from '../crypto.js';
 import * as merchantApi from '../marketplace/merchantApi.js';
 import * as cabinet from '../marketplace/cabinet.js';
 import { cardCompetitors } from '../marketplace/catalog.js';
 import { computeReprice, RepriceError } from '../marketplace/reprice.js';
-import * as repriceStore from '../marketplace/repriceStore.js';
-import { runOnce as repriceRunOnce } from '../marketplace/repricePoller.js';
 import { normalizeOrder, normalizeEntry, normalizeOffer } from '../marketplace/normalize.js';
-import { diagnose } from '../marketplace/loginHelpers.js';
 import * as customerSms from '../marketplace/customerSms.js';
 import * as smsStore from '../marketplace/autoSmsStore.js';
+import * as shopStore from '../marketplace/shopStore.js';
 import { runOnce as smsRunOnce, sendTest as smsSendTest } from '../marketplace/autoSmsPoller.js';
 import { discoverChat } from '../marketplace/chatDiscover.js';
 import { sendChatMessage, ChatError } from '../marketplace/kaspiChat.js';
@@ -25,99 +22,19 @@ import { sendChatMessage, ChatError } from '../marketplace/kaspiChat.js';
 //  TOKEN_SECRET_KEY) и живут у клиента — в браузере или в настройках NS WMS.
 // ═══════════════════════════════════════════════════
 
+import {
+  seal,
+  unseal,
+  fail,
+  cabinetOk,
+  readTokenAuth,
+  requireToken,
+  readCabinet,
+  requireCabinet,
+  refreshCabinet,
+} from '../marketplace/auth.js';
+
 const router = Router();
-
-const seal = (obj) => encryptSecret(Buffer.from(JSON.stringify(obj), 'utf8'));
-const unseal = (blob) => JSON.parse(decryptSecret(blob).toString('utf8'));
-
-// Ответ Kaspi наружу — только коротким следом (без HTML-простыней и секретов):
-// по нему видно, что именно ответил Kaspi, когда вход не проходит.
-// pending (jar + пароль для шага «код») наружу отдаём ТОЛЬКО запечатанным.
-const fail = (res, err) => {
-  const status = Number.isInteger(err?.status) && err.status >= 400 && err.status < 600 ? err.status : 500;
-  const body = err?.body;
-  const out = { error: err?.message || 'Ошибка' };
-  if (body && typeof body === 'object') {
-    const details = {};
-    if (Array.isArray(body.diag)) details.diag = body.diag;
-    if (body.secondFactor) details.secondFactor = true;
-    if (body.needCode) {
-      details.needCode = true;
-      if (body.waitSeconds) details.waitSeconds = body.waitSeconds;
-      if (body.pending) out.mcPending = seal(body.pending); // jar сессии MFA — только зашифрованно
-    }
-    if (Object.keys(details).length) out.details = details;
-  } else if (body) {
-    out.details = { diag: [diagnose('ответ', status, body)] };
-  }
-  res.status(status).json(out);
-};
-
-// Успех входа (по паролю или по коду): один и тот же ответ
-const cabinetOk = (res, req, { jar, merchants }) => {
-  const merchantUid = String(req.body?.merchantUid || '') || merchants[0]?.uid || null;
-  res.json({ success: true, mcSession: seal({ jar, merchantUid, merchants }), merchantUid, merchants });
-};
-
-// ─── Токен API продавца ───
-// Браузер присылает зашифрованный X-Market-Token. Внешняя система (NS WMS), у
-// которой токен и так хранится у себя, может прислать его как есть:
-// X-Kaspi-Token + X-Merchant-Uid.
-const readTokenAuth = (req) => {
-  const sealed = req.headers['x-market-token'];
-  if (sealed) {
-    try {
-      const { token, merchantUid } = unseal(sealed);
-      return { token, merchantUid: req.headers['x-merchant-uid'] || merchantUid || null };
-    } catch {
-      return { invalid: true };
-    }
-  }
-  const token = req.headers['x-kaspi-token'];
-  if (token) return { token: String(token).trim(), merchantUid: req.headers['x-merchant-uid'] || null };
-  return null;
-};
-
-const requireToken = (req, res, next) => {
-  const auth = readTokenAuth(req);
-  if (!auth) return res.status(401).json({ error: 'Нет токена API продавца (X-Market-Token или X-Kaspi-Token).' });
-  if (auth.invalid)
-    return res.status(401).json({ error: 'Токен повреждён или сменился ключ сервера. Подключите заново.' });
-  req.market = auth;
-  next();
-};
-
-// ─── Сессия кабинета ───
-const readCabinet = (req) => {
-  const sealed = req.headers['x-mc-session'];
-  if (!sealed) return null;
-  try {
-    const s = unseal(sealed);
-    return {
-      jar: s.jar || {},
-      merchantUid: req.headers['x-merchant-uid'] || s.merchantUid || null,
-      merchants: s.merchants || [],
-    };
-  } catch {
-    return { invalid: true };
-  }
-};
-
-const requireCabinet = (req, res, next) => {
-  const s = readCabinet(req);
-  if (!s)
-    return res.status(401).json({ error: 'Нет сессии кабинета (X-Mc-Session). Войдите логином кабинета продавца.' });
-  if (s.invalid) return res.status(401).json({ error: 'Сессия кабинета повреждена. Войдите заново.' });
-  req.cabinet = s;
-  next();
-};
-
-// Кабинет продлевает cookie на ходу — отдаём клиенту свежую запечатанную сессию
-const refreshCabinet = (req, res, jar) => {
-  const sealed = seal({ jar, merchantUid: req.cabinet.merchantUid, merchants: req.cabinet.merchants });
-  res.set('X-Mc-Session', sealed);
-  return sealed;
-};
 
 // ═══ Что доступно с присланными данными ═══
 
@@ -324,57 +241,6 @@ router.post('/reprice', requireCabinet, async (req, res) => {
   }
 });
 
-// ═══ Авто-демпинг: фоновое слежение за конкурентами ═══
-// Сессию кабинета сервер хранит у себя, чтобы менять цену без открытого браузера.
-
-const saveRepriceSession = (req) => {
-  const sealed = req.headers['x-mc-session'];
-  const cab = readCabinet(req);
-  if (sealed && cab && !cab.invalid) repriceStore.setSession(sealed, cab.merchantUid);
-};
-
-router.get('/reprice/auto', (req, res) => {
-  res.json(repriceStore.publicState());
-});
-
-router.put('/reprice/auto', (req, res) => {
-  if (req.body?.enabled) {
-    saveRepriceSession(req);
-    if (!repriceStore.getState().mcSession) {
-      return res
-        .status(400)
-        .json({ error: 'Сначала войдите в кабинет по телефону — авто-демпинг меняет цену от вашего имени.' });
-    }
-  }
-  repriceStore.setEnabled(!!req.body?.enabled);
-  res.json(repriceStore.publicState());
-});
-
-router.post('/reprice/auto/product', (req, res) => {
-  const { cardId, sku, model, floor, step } = req.body || {};
-  if (!cardId || !sku) return res.status(400).json({ error: 'Нужны номер карточки и артикул.' });
-  if (!(Number(floor) > 0)) return res.status(400).json({ error: 'Укажите минимальную цену (пол) больше нуля.' });
-  saveRepriceSession(req);
-  repriceStore.upsertProduct({ cardId, sku, model, floor, step });
-  res.json(repriceStore.publicState());
-});
-
-router.delete('/reprice/auto/product', (req, res) => {
-  const { cardId, sku } = req.body || {};
-  repriceStore.removeProduct(cardId, sku);
-  res.json(repriceStore.publicState());
-});
-
-router.post('/reprice/auto/run', async (req, res) => {
-  if (!repriceStore.getState().enabled) return res.status(400).json({ error: 'Авто-демпинг выключен.' });
-  try {
-    const stats = await repriceRunOnce();
-    res.json({ ...stats, ...repriceStore.publicState() });
-  } catch (err) {
-    res.status(502).json({ error: err.message });
-  }
-});
-
 // ═══ Заказы (API по токену) ═══
 
 router.get('/orders', requireToken, async (req, res) => {
@@ -418,7 +284,7 @@ router.get('/orders/:id', requireToken, async (req, res) => {
 
 router.post('/orders/:id/accept', requireToken, async (req, res) => {
   try {
-    res.json({ success: true, result: await merchantApi.acceptOrder(req.market, req.params.id) });
+    res.json({ success: true, result: await merchantApi.acceptOrder(req.market, req.params.id, req.body?.code) });
   } catch (err) {
     fail(res, err);
   }
@@ -456,7 +322,7 @@ router.get('/sms', (req, res) => {
   res.json({
     config: customerSms.publicConfig(st.config),
     tokenConnected: !!st.marketToken,
-    chatConnected: !!st.mcSession,
+    chatConnected: !!shopStore.getState().mcSession,
     channels: customerSms.CHANNELS.map((id) => ({ id, label: customerSms.CHANNEL_LABELS[id] })),
     providers: customerSms.PROVIDERS.map((id) => ({ id, label: customerSms.PROVIDER_LABELS[id] })),
     placeholders: customerSms.PLACEHOLDERS,
@@ -479,8 +345,8 @@ router.put('/sms', (req, res) => {
       // Чат Kaspi пишется от имени кабинета — нужна его сессия
       if (customerSms.usesChat(cfg)) {
         const cab = readCabinet(req);
-        if (cab && !cab.invalid) smsStore.setMcSession(req.headers['x-mc-session']);
-        else if (!smsStore.getState().mcSession) {
+        if (cab && !cab.invalid) shopStore.setSession(req.headers['x-mc-session'], cab.merchantUid);
+        else if (!shopStore.getState().mcSession) {
           return res.status(400).json({ error: 'Для чата Kaspi войдите в кабинет продавца по телефону.' });
         }
       }

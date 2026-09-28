@@ -20,7 +20,6 @@ const empty = () => ({
   config: defaultConfig(),
   marketToken: null,
   merchantUid: null,
-  mcSession: null, // сессия кабинета — для сообщений в чат Kaspi
   sent: {},
   log: [],
 });
@@ -98,16 +97,21 @@ export const recordSend = ({ code, event, status, phone, text, error, messageId,
 
 export const recentLog = (limit = 50) => read().log.slice(0, limit);
 
-// Сессия кабинета для чата Kaspi (запечатанная). Кабинет продлевает cookie —
-// после каждого запроса кладём свежую.
-export const setMcSession = (mcSession) => {
-  read();
-  state.mcSession = mcSession || null;
-  write();
-};
-
 export const clearToken = () => {
   read();
   state.marketToken = null;
   write();
+};
+
+// Что уже ушло по заказам: { код: { new: 'sent', issued: 'failed' } }
+export const statusesFor = (codes) => {
+  read();
+  const out = {};
+  for (const code of codes) {
+    for (const ev of ['new', 'issued']) {
+      const rec = state.sent[`${code}:${ev}`];
+      if (rec) (out[code] ||= {})[ev] = rec.status;
+    }
+  }
+  return out;
 };
