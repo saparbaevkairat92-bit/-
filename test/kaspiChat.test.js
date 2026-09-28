@@ -10,7 +10,7 @@ const fakeChat = (req, res) => {
   let body = '';
   req.on('data', (c) => (body += c));
   req.on('end', () => {
-    seen.push({ path: req.url, body, cookie: req.headers.cookie || '' });
+    seen.push({ path: req.url, body, cookie: req.headers.cookie || '', auth: req.headers.authorization || '' });
     res.setHeader('Content-Type', 'application/json');
     if (mode === 'expired') {
       res.statusCode = 401;
@@ -18,7 +18,7 @@ const fakeChat = (req, res) => {
     }
     if (req.url.endsWith('/api/v1/chat/search')) {
       res.setHeader('Set-Cookie', 'mc-sid=fresh; Path=/');
-      const found = mode !== 'nochat';
+      const found = mode !== 'nochat' && mode !== 'start';
       return res.end(
         JSON.stringify({
           data: found
@@ -30,9 +30,18 @@ const fakeChat = (req, res) => {
         }),
       );
     }
+    if (req.url.endsWith('/api/v1/group/startChat') && mode === 'start') {
+      const b = JSON.parse(body);
+      // Как у кабинета: открывает чат по заказу и отдаёт его id в data
+      if (b.type === 'ORDER' && b.id === '888')
+        return res.end(JSON.stringify({ data: { id: 'g-new', title: 'Заказ' } }));
+      res.statusCode = 400;
+      return res.end(JSON.stringify({ error: { title: 'bad type' } }));
+    }
     if (req.url.endsWith('/api/v1/messages/sendMessage')) {
-      if (mode === 'reject') return res.end(JSON.stringify({ success: false, message: 'нельзя' }));
-      return res.end(JSON.stringify({ success: true, id: 'm1' }));
+      if (mode === 'reject')
+        return res.end(JSON.stringify({ data: { status: 'rejected', alert: { title: 'Нельзя писать' } } }));
+      return res.end(JSON.stringify({ data: { status: 'sent', id: 'm1' } }));
     }
     res.statusCode = 404;
     res.end('{}');
@@ -67,20 +76,40 @@ describe('kaspiChat', () => {
       ],
     };
     assert.equal(chat.pickChatId(data, '555'), 'g-2');
-    assert.equal(chat.pickChatId({ groups: [{ id: 9 }] }, '1'), '9');
+    // Чата с номером заказа нет — не берём чужой, пусть откроется новый
+    assert.equal(chat.pickChatId({ groups: [{ id: 9 }] }, '1'), null);
+    assert.equal(chat.pickChatId({ groups: [{ id: 9 }] }), '9');
     assert.equal(chat.pickChatId([], '1'), null);
   });
 
   it('finds the order chat and sends the text there with cabinet cookies', async () => {
     mode = 'ok';
     seen.length = 0;
-    const r = await chat.sendChatMessage({ 'mc-session': 's1' }, { orderCode: '777', text: 'Спасибо!' });
+    const r = await chat.sendChatMessage({ 'mc-session': 's1', t_token: 'tt' }, { orderCode: '777', text: 'Спасибо!' });
     assert.equal(r.sent, true);
     assert.equal(r.chatId, 'g-777');
     assert.equal(r.jar['mc-sid'], 'fresh', 'cabinet cookies refreshed');
     const send = seen.find((s) => s.path.endsWith('/sendMessage'));
-    assert.deepEqual(JSON.parse(send.body), { groupId: 'g-777', text: 'Спасибо!', messageType: 'TEXT' });
+    // Тело — ровно как у виджета кабинета
+    const b = JSON.parse(send.body);
+    assert.deepEqual(b.data, { text: 'Спасибо!' });
+    assert.equal(b.groupId, 'g-777');
+    assert.match(b.messageId, /^[0-9a-f-]{36}$/);
+    assert.ok(Math.abs(b.created - Date.now()) < 60000);
+    assert.equal(b.transitionContextUrl, 'https://pay.kaspi.kz/chat?threadId=g-777&isWeb=true');
     assert.match(send.cookie, /mc-session=s1/);
+    assert.equal(send.auth, 'Bearer tt');
+  });
+
+  it('чата нет — открывает его по заказу (startChat) и пишет туда', async () => {
+    mode = 'start';
+    seen.length = 0;
+    const r = await chat.sendChatMessage({}, { orderCode: '888', orderId: 'b64id', text: 'Привет' });
+    assert.equal(r.chatId, 'g-new');
+    const start = seen.filter((s) => s.path.endsWith('/startChat')).map((s) => JSON.parse(s.body));
+    assert.deepEqual(start[0], { id: '888', type: 'ORDER' });
+    const send = JSON.parse(seen.find((s) => s.path.endsWith('/sendMessage')).body);
+    assert.equal(send.groupId, 'g-new');
   });
 
   it('dry run only searches', async () => {

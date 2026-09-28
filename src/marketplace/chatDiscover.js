@@ -218,6 +218,15 @@ export const traceChatApi = (texts) => {
         result.auth.push(around(text, m.index, 250, 350));
     }
   }
+  // Как кабинет открывает чат по заказу: createChatById(id, type, url) — нужен type
+  result.createCalls = [];
+  for (const text of texts) {
+    for (const m of findAll(text, /createChatById\(|\.createChat\(\{/g, 12)) {
+      const snip = around(text, m.index, 300, 300);
+      if (!/createChatById:\(|createChat:e=>/.test(snip.slice(280, 330))) result.createCalls.push(snip);
+    }
+  }
+  result.createCalls = [...new Set(result.createCalls)].slice(0, 8);
   result.client = [...new Set(result.client)].slice(0, 12);
   result.auth = [...new Set(result.auth)].slice(0, 16);
   return result;
@@ -334,9 +343,14 @@ export const discoverChat = async (jar) => {
     scannedScripts: scanned.map(({ url, status, bytes }) => ({ url, status, bytes })),
     sendTextSnippets: [...snippets], // куски кода вокруг sendText — главное
     // Разбор API виджета: адреса, где вызываются, как устроен клиент и токен
-    chatApi: traceChatApi(
-      scanned.filter((x) => x.text && /chats\/api\/mobile|sendMessage/.test(x.text)).map((x) => x.text),
-    ),
+    chatApi: {
+      ...traceChatApi(
+        scanned.filter((x) => x.text && /chats\/api\/mobile|sendMessage/.test(x.text)).map((x) => x.text),
+      ),
+      // Вызовы открытия чата — в коде самого кабинета (страница заказа)
+      createCalls: traceChatApi(scanned.filter((x) => x.text && /createChat/.test(x.text)).map((x) => x.text))
+        .createCalls,
+    },
     candidates: list.slice(0, 120),
     errors,
     hint: 'Пришлите разработчику sendTextSnippets и candidates. Сообщения покупателям не отправлялись — только чтение кода.',
