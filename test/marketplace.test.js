@@ -238,3 +238,17 @@ describe('ссылка на товар Kaspi', () => {
     assert.equal(normalizeOffer({ sku: 'A', masterSku: '168687900' }).cardUrl, 'https://kaspi.kz/shop/p/-168687900/');
   });
 });
+
+describe('доставка 0 до передачи курьеру — ещё не посчитана', () => {
+  it('Kaspi Доставка с 0 → тариф; самовывоз с 0 → 0', () => {
+    assert.equal(
+      normalizeOrder({ id: '1', attributes: { state: 'KASPI_DELIVERY', deliveryCostForSeller: 0 } })
+        .deliveryCostForSeller,
+      null,
+    );
+    assert.equal(
+      normalizeOrder({ id: '1', attributes: { state: 'PICKUP', deliveryCostForSeller: 0 } }).deliveryCostForSeller,
+      0,
+    );
+  });
+});

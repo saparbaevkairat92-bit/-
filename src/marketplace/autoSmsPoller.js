@@ -80,6 +80,9 @@ export const runOnce = async ({ fetchOrders, fetchEntries } = {}) => {
         const attrs = order.attributes || {};
         const code = String(attrs.code || '').trim();
         if (!code || seen.has(code)) continue;
+        // Kaspi может не применить фильтр по статусу — проверяем сами:
+        // «заказ выдан» получают только выданные заказы
+        if (!EVENT_STATUSES[event].includes(attrs.status)) continue;
         seen.add(code);
         // Только заказы после включения рассылки
         stats.seen += 1;

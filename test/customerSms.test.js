@@ -94,3 +94,26 @@ describe('channel — чат Kaspi или SMS', () => {
     assert.throws(() => mergeConfig({}, { enabled: true, channel: 'fax' }, 1), SmsError);
   });
 });
+
+describe('авто-сообщения: статус проверяем сами', () => {
+  it('«выдан» не уходит принятому заказу, даже если Kaspi вернул его на фильтр COMPLETED', async () => {
+    process.env.TOKEN_SECRET_KEY ||= 'f'.repeat(64);
+    const { encryptSecret } = await import('../src/crypto.js');
+    const store = await import('../src/marketplace/autoSmsStore.js');
+    const { runOnce } = await import('../src/marketplace/autoSmsPoller.js');
+    const tok = encryptSecret(Buffer.from(JSON.stringify({ token: 't' }), 'utf8'));
+    store.setToken(tok, '1');
+    store.setConfig({
+      ...store.getState().config,
+      enabled: true,
+      channel: 'sms',
+      notifyNew: false,
+      notifyIssued: true,
+      apiKey: '',
+      enabledAtMs: 1,
+    });
+    const orders = [{ id: 'a', attributes: { code: 'X-ACC', status: 'ACCEPTED_BY_MERCHANT', creationDate: 5 } }];
+    const stats = await runOnce({ fetchOrders: async () => ({ orders }) });
+    assert.equal(stats.sent + stats.failed + stats.skipped, 0);
+  });
+});
