@@ -52,6 +52,18 @@ const extractSnippets = (text, into) => {
       if (into.size > 60) return;
     }
   }
+  // Как кабинет собирает адрес файла виджета из FRONT_WEB_CHAT_URL — берём шире
+  for (const needle of ['FRONT_WEB_CHAT_URL', 'WebChatInitializer', 'accessToWebChat']) {
+    let from = 0;
+    for (let n = 0; n < 4; n++) {
+      const i = text.indexOf(needle, from);
+      if (i < 0) break;
+      // Присвоение в variables.js неинтересно — там только сам базовый адрес
+      if (!/FRONT_WEB_CHAT_URL\s*=\s*['"]/.test(text.slice(i, i + 30)))
+        into.add(text.slice(Math.max(0, i - 200), i + 500).replace(/\s+/g, ' '));
+      from = i + needle.length;
+    }
+  }
 };
 
 // Ссылки на .js-чанки внутри бандла (в т.ч. виджет чата)
@@ -84,9 +96,38 @@ const extractWidgetBases = (text) => {
 };
 
 const widgetVariants = (base) =>
-  /\.js$/.test(base)
+  /\.m?js$/.test(base)
     ? [base]
-    : [`${base}.js`, `${base}/index.js`, `${base}/main.js`, `${base}/webchat-widget.js`, `${base}/`];
+    : [
+        `${base}.js`,
+        `${base}/index.js`,
+        `${base}/main.js`,
+        `${base}/webchat-widget.js`,
+        `${base}/webchat-widget.mjs`,
+        `${base}/index.mjs`,
+        `${base}/manifest.json`,
+        `${base}/index.html`,
+        `${base}/`,
+      ];
+
+// Хвосты, которые код дописывает к FRONT_WEB_CHAT_URL: строки рядом с ним вида
+// "/что-то.js" — склеиваем с базовым адресом
+const extractWidgetTails = (text) => {
+  const tails = new Set();
+  let from = 0;
+  for (let n = 0; n < 6; n++) {
+    const i = text.indexOf('FRONT_WEB_CHAT_URL', from);
+    if (i < 0) break;
+    from = i + 18;
+    const around = text.slice(i, i + 500);
+    const re = /["'`]((?:\/|\.\/)?[\w.${}/-]*\.(?:m?js|json))(?:\?[^"'`]*)?["'`]/g;
+    let m;
+    while ((m = re.exec(around)) !== null) {
+      if (!m[1].includes('${')) tails.add(m[1].replace(/^\.?\/?/, '/'));
+    }
+  }
+  return tails;
+};
 
 // Ленивые чанки Vite: "assets/Имя-хэш.js" считается от корня кабинета (/mc/),
 // а "./Имя-хэш.js" — от самого скрипта. Чат может жить в одном из них.
@@ -149,43 +190,63 @@ export const discoverChat = async (jar) => {
     for (const c of extractChunkUrls(text, url)) chunkUrls.add(c);
   }
 
-  // 4. Виджет чата без «.js» в адресе — пробуем типовые имена файла; и
-  // ленивые чанки кабинета, где чата чаще всего и живёт
-  const widgetUrls = new Set();
+  // 4. Ленивые чанки кабинета (Vite) — в них и загрузчик виджета, и сам чат
   const viteChunks = new Set();
+  for (const s of scanned.filter((x) => x.text)) for (const c of extractViteChunks(s.text, s.url)) viteChunks.add(c);
+  const queue = [...chunkUrls, ...[...viteChunks].filter((u) => /chat|message|dialog|widget/i.test(u)), ...viteChunks];
+  let fetched = 0;
+  const fetchQueue = async () => {
+    while (queue.length && fetched < MAX_CHUNKS * 3) {
+      const url = queue.shift();
+      if (scanned.some((s) => s.url === url)) continue;
+      const text = await scan(url, '*/*');
+      fetched += 1;
+      for (const c of extractChunkUrls(text, url)) queue.unshift(c);
+    }
+  };
+  await fetchQueue();
+
+  // 5. Виджет чата: базовый адрес (FRONT_WEB_CHAT_URL из variables.js) и хвост
+  // имени файла могут лежать в разных скриптах — собираем по всем скачанным
+  const bases = new Set();
+  const tails = new Set();
   for (const s of scanned.filter((x) => x.text)) {
-    for (const b of extractWidgetBases(s.text)) for (const v of widgetVariants(b)) widgetUrls.add(v);
-    for (const c of extractViteChunks(s.text, s.url)) viteChunks.add(c);
+    for (const b of extractWidgetBases(s.text)) bases.add(b);
+    for (const t of extractWidgetTails(s.text)) tails.add(t);
   }
-  const widgetHtml = [];
+  const widgetUrls = new Set();
+  for (const b of bases) {
+    for (const t of tails) widgetUrls.add(`${b}${t}`);
+    for (const v of widgetVariants(b)) widgetUrls.add(v);
+  }
   for (const url of widgetUrls) {
     if (scanned.some((s) => s.url === url)) continue;
     const text = await scan(url, '*/*');
-    // Если по адресу отдали HTML-заглушку виджета — в ней ссылки на его скрипты
-    if (/<script/i.test(text)) widgetHtml.push({ url, text });
-  }
-  for (const { url, text } of widgetHtml) {
+    // HTML-заглушка виджета — берём ссылки на его скрипты
     const re = /<script[^>]+src=["']([^"']+)["']/gi;
     let m;
     while ((m = re.exec(text)) !== null) {
       try {
-        chunkUrls.add(new URL(m[1], url).toString());
+        queue.unshift(new URL(m[1], url).toString());
       } catch {
         /* skip */
       }
     }
+    // Манифест сборки — ссылки на файлы виджета
+    const fileRe = /"(?:file|src|main|module)"\s*:\s*"([^"]+\.m?js)"/g;
+    while ((m = fileRe.exec(text)) !== null) {
+      try {
+        queue.unshift(new URL(m[1], url).toString());
+      } catch {
+        /* skip */
+      }
+    }
+    // Сам виджет — его чанки
+    for (const c of extractChunkUrls(text, url)) queue.unshift(c);
+    for (const c of extractViteChunks(text, url)) queue.push(c);
   }
-
-  // 5. Чанки чата (второй уровень) — там и лежит sendText
-  const second = [...chunkUrls, ...[...viteChunks].filter((u) => /chat|message|dialog|widget/i.test(u)), ...viteChunks];
-  let fetched = 0;
-  for (const url of second) {
-    if (fetched >= MAX_CHUNKS * 2) break;
-    if (scanned.some((s) => s.url === url)) continue;
-    const text = await scan(url, '*/*');
-    fetched += 1;
-    for (const c of extractChunkUrls(text, url)) if (!scanned.some((s) => s.url === c)) second.push(c);
-  }
+  fetched = 0;
+  await fetchQueue();
 
   const list = [...candidates].sort((a, b) => {
     const score = (s) => (/(sendtext|send|create|post|new)/i.test(s) ? 0 : 1) + (/[/]/.test(s) ? 0 : 1);
