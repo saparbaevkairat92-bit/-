@@ -16,6 +16,7 @@ const fakeKaspi = (req, res) => {
   const tok = req.headers['x-auth-token'];
   seen.push({ path: u.pathname, query: Object.fromEntries(u.searchParams), tok });
   res.setHeader('Content-Type', 'application/json');
+  if (tok === 'hang') return; // Kaspi молчит — ответа не будет никогда
   if (tok === 'bad') {
     res.statusCode = 401;
     return res.end(JSON.stringify({ errors: [{ title: 'Unauthorized' }] }));
@@ -42,6 +43,7 @@ describe('токен API продавца', () => {
     await new Promise((r) => fake.listen(0, '127.0.0.1', r));
     process.env.KASPI_MERCHANT_API_URL = `http://127.0.0.1:${fake.address().port}/api`;
     process.env.TOKEN_SECRET_KEY = 'e'.repeat(64);
+    process.env.KASPI_TIMEOUT_MS = '3000';
     process.env.MARKET_SHOP_FILE = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tok-')), 'shop.json');
     const express = (await import('express')).default;
     const { default: shop } = await import('../src/routes/shop.js');
@@ -92,6 +94,17 @@ describe('токен API продавца', () => {
     assert.ok(seen.every((s) => s.tok === 'flaky'));
     const sms = await call('GET', '/api/market/sms');
     assert.equal(sms.body.tokenConnected, true);
+  });
+
+  it('Kaspi молчит — подключение не висит, токен сохраняется с предупреждением', async () => {
+    const t0 = Date.now();
+    const r = await call('POST', '/api/market/connect', { token: 'hang', merchantUid: '30430811' });
+    assert.ok(Date.now() - t0 < 10000, 'ответ пришёл быстро');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.verified, false);
+    assert.match(r.body.warning, /не ответил/);
+    const st = await call('GET', '/api/market/shop/state');
+    assert.equal(st.body.tokenSaved.merchantUid, '30430811');
   });
 
   it('отключение стирает токен и на сервере', async () => {

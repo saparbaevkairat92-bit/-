@@ -17,7 +17,7 @@
 // «Пробный» режим (dryRun) делает только поиск — ничего не отправляет. По его
 // следу (trace) видно, что ответил Kaspi, если формат придётся поправить.
 
-import fetch from 'node-fetch';
+import { fetchWithTimeout as fetch } from './http.js';
 import { CABINET_URL, BROWSER_UA } from './config.js';
 import { parseSetCookies, mergeCookies, cookieHeader, setCookiesFromResponse } from './cookies.js';
 import { looksBlocked } from './loginHelpers.js';

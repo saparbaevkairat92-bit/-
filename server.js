@@ -1,3 +1,4 @@
+import dns from 'dns';
 import express from 'express';
 import path from 'path';
 import { PORT, ROOT_DIR } from './src/config.js';
@@ -13,6 +14,10 @@ import { startPolling } from './src/polling.js';
 import { startAutoSmsPolling } from './src/marketplace/autoSmsPoller.js';
 import { startRepricePolling } from './src/marketplace/repricePoller.js';
 import 'dotenv/config';
+
+// Сначала IPv4: на части хостингов (Railway и т.п.) исходящий IPv6 не
+// работает, и соединение с kaspi.kz по IPv6-адресу висело до таймаута
+dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 

@@ -11,7 +11,7 @@
 // Сессия — cookie кабинета; сервер их не хранит, а шифрует и отдаёт клиенту
 // (как vtokenSecret у Kaspi Pay).
 
-import fetch from 'node-fetch';
+import { fetchWithTimeout as fetch } from './http.js';
 import { URLSearchParams } from 'url';
 import {
   CABINET_LOGIN_URL,
