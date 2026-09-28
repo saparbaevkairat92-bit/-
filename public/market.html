@@ -249,6 +249,22 @@
               <button class="btn btn-primary" style="margin: 0" onclick="reprice(true)">Поставить цену</button>
             </div>
             <div id="repriceMsg" class="hidden" style="margin-top: 8px"></div>
+
+            <div style="margin-top: 14px; border-top: 1px dashed #ddd; padding-top: 10px">
+              <label class="row" style="align-items: center; gap: 8px">
+                <input type="checkbox" id="autoRepriceOn" style="width: auto" onchange="autoRepriceToggle()" />
+                <span><b>Авто-демпинг: сам следит и меняет цену</b></span>
+              </label>
+              <p class="muted" id="autoRepriceHint" style="margin-top: 2px">
+                Сервер сам, по расписанию, держит цену ниже конкурентов (но не ниже пола) для товаров из списка.
+              </p>
+              <button class="btn btn-secondary" onclick="autoRepriceAdd()">Добавить этот товар в авто-демпинг</button>
+              <div id="autoRepriceMsg" class="hidden" style="margin-top: 8px"></div>
+              <div id="autoRepriceList" style="margin-top: 8px"></div>
+              <button class="btn btn-secondary" id="btnAutoRun" onclick="autoRepriceRun()" style="margin-top: 8px">
+                Проверить сейчас
+              </button>
+            </div>
           </div>
         </div>
       </div>
