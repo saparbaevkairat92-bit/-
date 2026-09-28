@@ -42,9 +42,19 @@ export const normalizeOrder = (item) => {
     assembled: !!a.assembled,
     signatureRequired: !!a.signatureRequired,
     // Доставка, которую Kaspi удержит с продавца (точная, из заказа)
-    deliveryCostForSeller: a.deliveryCostForSeller ?? null,
+    deliveryCostForSeller: deliveryCost(a),
     tab: orderTab(a),
   };
+};
+
+// Доставка, которую Kaspi удержит. 0 у ещё не переданного курьеру заказа Kaspi
+// Доставки — «ещё не посчитано», а не бесплатная доставка: тогда null и тариф.
+export const deliveryCost = (a = {}) => {
+  const v = a.deliveryCostForSeller;
+  if (v === undefined || v === null || !Number.isFinite(Number(v))) return null;
+  const n = Math.round(Number(v) * 100) / 100;
+  if (n === 0 && (a.state === 'KASPI_DELIVERY' || a.isKaspiDelivery) && a.state !== 'ARCHIVE') return null;
+  return n;
 };
 
 // ─── Вкладки заказов как в кабинете Kaspi ───
