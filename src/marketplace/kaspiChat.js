@@ -221,7 +221,11 @@ export const sendChatMessage = async (jar, { orderCode, orderId, text, phone, me
   const found = await findChat(jar, { orderCode: code, orderId, phone, merchantUid });
   const { trace } = found;
   if (!found.chatId) {
-    throw new ChatError(404, `Чат по заказу №${code} не найден и не открылся в кабинете Kaspi.`, trace);
+    // Ответ Kaspi на попытку открыть чат — сразу в тексте ошибки (журнал, тост)
+    const tried = trace.filter((t) => t.step.startsWith('начать чат'));
+    const last = tried[tried.length - 1];
+    const why = last ? ` Kaspi ответил на ${last.step}: HTTP ${last.status} ${short(last.body).slice(0, 160)}` : '';
+    throw new ChatError(404, `Чат по заказу №${code} не найден и не открылся в кабинете Kaspi.${why}`, trace);
   }
   if (dryRun) return { ok: true, sent: false, chatId: found.chatId, jar: found.jar, trace };
 
