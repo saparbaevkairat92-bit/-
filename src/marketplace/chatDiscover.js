@@ -174,11 +174,24 @@ const findAll = (text, re, limit) => {
   return out;
 };
 
+// Все адреса API виджета (/api/v1/...), а не только известные: среди них
+// должно быть создание чата по заказу — без него писать можно только в чат,
+// который уже открыл покупатель
+export const findApiPaths = (texts) => {
+  const found = new Set(CHAT_ENDPOINTS);
+  for (const text of texts) {
+    const re = /["'`](\/api\/v\d+\/[\w/.-]{3,80})["'`]/g;
+    let m;
+    while ((m = re.exec(text)) !== null && found.size < 60) found.add(m[1]);
+  }
+  return [...found];
+};
+
 export const traceChatApi = (texts) => {
-  const result = { endpoints: {}, client: [], auth: [] };
+  const result = { endpoints: {}, client: [], auth: [], allPaths: findApiPaths(texts) };
   const clients = new Set();
   for (const text of texts) {
-    for (const path of CHAT_ENDPOINTS) {
+    for (const path of result.allPaths) {
       const def = new RegExp(
         `(?:async\\s+)?function\\s+([\\w$]+)\\(([\\w$]*)\\)\\{return\\s+([\\w$]+)\\.(post|get)\\(["'\`]${reEsc(path)}`,
       ).exec(text);
@@ -200,7 +213,7 @@ export const traceChatApi = (texts) => {
       for (const m of findAll(text, new RegExp(`${reEsc(c)}\\.interceptors`, 'g'), 4))
         result.client.push(around(text, m.index, 100, 600));
     }
-    for (const needle of ['t_token', 'withCredentials', 'createChat', 'openChatById']) {
+    for (const needle of ['t_token', 'withCredentials', 'createChat', 'openChatById', 'orderCode', 'createGroup']) {
       for (const m of findAll(text, new RegExp(reEsc(needle), 'g'), 3))
         result.auth.push(around(text, m.index, 250, 350));
     }
