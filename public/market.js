@@ -250,6 +250,15 @@ const switchTab = (tab) => {
   }
   if (tab === 'wms') renderWms();
   if (tab === 'sms') loadSms();
+  if (tab === 'competitors') showReprice();
+};
+
+// Показать блок демпинга сразу при входе в кабинет — не прятать, даже если
+// витрина конкурентов недоступна (иначе демпинг «пропадает» на облачном IP)
+const showReprice = () => {
+  const on = !!getState().mcSession;
+  $('repriceBox').classList.toggle('hidden', !on);
+  if (on) loadAuto();
 };
 
 // ═══ Заказы ═══
@@ -505,18 +514,14 @@ const loadCompetitors = async () => {
         </div>`,
         )
         .join('');
-    // Демпинг доступен только при входе в кабинет (там меняется цена)
-    if (getState().mcSession) {
-      $('repriceBox').classList.remove('hidden');
-      if (r.ours[0]?.merchantSku) $('repriceSku').value = r.ours[0].merchantSku;
-      showMsg('repriceMsg', '', '');
-      loadAuto();
-    } else {
-      $('repriceBox').classList.add('hidden');
-    }
+    // Демпинг доступен при входе в кабинет; sku подставим из нашего предложения
+    showReprice();
+    if (getState().mcSession && r.ours[0]?.merchantSku) $('repriceSku').value = r.ours[0].merchantSku;
+    showMsg('repriceMsg', '', '');
   } catch (e) {
-    list.innerHTML = `<div class="status-bar status-err">${esc(e.message)}</div>`;
-    $('repriceBox').classList.add('hidden');
+    list.innerHTML = `<div class="status-bar status-err">${esc(e.message)} — витрина Kaspi может блокировать облачный сервер. Демпинг ниже всё равно доступен, если запустить с обычного IP.</div>`;
+    // Не прячем демпинг: пусть будет виден с понятным сообщением
+    showReprice();
   }
 };
 
