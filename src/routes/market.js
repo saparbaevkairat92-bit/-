@@ -4,6 +4,8 @@ import * as merchantApi from '../marketplace/merchantApi.js';
 import * as cabinet from '../marketplace/cabinet.js';
 import { cardCompetitors } from '../marketplace/catalog.js';
 import { computeReprice, RepriceError } from '../marketplace/reprice.js';
+import * as repriceStore from '../marketplace/repriceStore.js';
+import { runOnce as repriceRunOnce } from '../marketplace/repricePoller.js';
 import { normalizeOrder, normalizeEntry, normalizeOffer } from '../marketplace/normalize.js';
 import { diagnose } from '../marketplace/loginHelpers.js';
 import * as customerSms from '../marketplace/customerSms.js';
@@ -317,6 +319,57 @@ router.post('/reprice', requireCabinet, async (req, res) => {
     res.json({ recommendation, applied, competitors });
   } catch (err) {
     fail(res, err);
+  }
+});
+
+// ═══ Авто-демпинг: фоновое слежение за конкурентами ═══
+// Сессию кабинета сервер хранит у себя, чтобы менять цену без открытого браузера.
+
+const saveRepriceSession = (req) => {
+  const sealed = req.headers['x-mc-session'];
+  const cab = readCabinet(req);
+  if (sealed && cab && !cab.invalid) repriceStore.setSession(sealed, cab.merchantUid);
+};
+
+router.get('/reprice/auto', (req, res) => {
+  res.json(repriceStore.publicState());
+});
+
+router.put('/reprice/auto', (req, res) => {
+  if (req.body?.enabled) {
+    saveRepriceSession(req);
+    if (!repriceStore.getState().mcSession) {
+      return res
+        .status(400)
+        .json({ error: 'Сначала войдите в кабинет по телефону — авто-демпинг меняет цену от вашего имени.' });
+    }
+  }
+  repriceStore.setEnabled(!!req.body?.enabled);
+  res.json(repriceStore.publicState());
+});
+
+router.post('/reprice/auto/product', (req, res) => {
+  const { cardId, sku, model, floor, step } = req.body || {};
+  if (!cardId || !sku) return res.status(400).json({ error: 'Нужны номер карточки и артикул.' });
+  if (!(Number(floor) > 0)) return res.status(400).json({ error: 'Укажите минимальную цену (пол) больше нуля.' });
+  saveRepriceSession(req);
+  repriceStore.upsertProduct({ cardId, sku, model, floor, step });
+  res.json(repriceStore.publicState());
+});
+
+router.delete('/reprice/auto/product', (req, res) => {
+  const { cardId, sku } = req.body || {};
+  repriceStore.removeProduct(cardId, sku);
+  res.json(repriceStore.publicState());
+});
+
+router.post('/reprice/auto/run', async (req, res) => {
+  if (!repriceStore.getState().enabled) return res.status(400).json({ error: 'Авто-демпинг выключен.' });
+  try {
+    const stats = await repriceRunOnce();
+    res.json({ ...stats, ...repriceStore.publicState() });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
   }
 });
 

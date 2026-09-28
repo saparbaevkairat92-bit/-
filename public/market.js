@@ -102,6 +102,12 @@ const showLoginError = (e) => {
 const post = (path, body) =>
   api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
 
+const put = (path, body) =>
+  api(path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+
+const del = (path, body) =>
+  api(path, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+
 // ═══ Подключение ═══
 
 const renderConnections = () => {
@@ -504,6 +510,7 @@ const loadCompetitors = async () => {
       $('repriceBox').classList.remove('hidden');
       if (r.ours[0]?.merchantSku) $('repriceSku').value = r.ours[0].merchantSku;
       showMsg('repriceMsg', '', '');
+      loadAuto();
     } else {
       $('repriceBox').classList.add('hidden');
     }
@@ -540,6 +547,91 @@ const reprice = async (apply) => {
     showMsg('repriceMsg', msg, r.applied ? 'ok' : 'info');
   } catch (e) {
     showMsg('repriceMsg', e.message, 'err');
+  }
+};
+
+// ═══ Авто-демпинг ═══
+
+const renderAuto = (st) => {
+  $('autoRepriceOn').checked = st.enabled;
+  $('autoRepriceHint').textContent = st.needLogin
+    ? 'Сессия кабинета истекла — войдите в кабинет заново, чтобы авто-демпинг продолжил.'
+    : st.enabled
+      ? 'Включено. Держим цену ниже конкурентов (но не ниже пола) для товаров ниже.'
+      : 'Сервер сам, по расписанию, держит цену ниже конкурентов (но не ниже пола) для товаров из списка.';
+  const list = $('autoRepriceList');
+  if (!st.products.length) {
+    list.innerHTML = '<p class="muted">Список пуст — добавьте товар кнопкой выше.</p>';
+  } else {
+    list.innerHTML = st.products
+      .map(
+        (p) => `
+      <div class="op-item">
+        <div class="op-row">
+          <span class="op-name">карточка ${esc(p.cardId)} · арт. ${esc(p.sku)}</span>
+          <a href="#" onclick="autoRepriceRemove('${esc(p.cardId)}','${esc(p.sku)}');return false" style="color:#c62828">убрать</a>
+        </div>
+        <div class="op-date">пол ${esc(money(p.floor))} · шаг ${esc(p.step)} ₸${
+          p.lastPrice ? ` · последняя цена ${esc(money(p.lastPrice))}` : ''
+        }</div>
+      </div>`,
+      )
+      .join('');
+  }
+};
+
+const loadAuto = async () => {
+  try {
+    renderAuto(await api('/api/market/reprice/auto'));
+  } catch (e) {
+    showMsg('autoRepriceMsg', e.message, 'err');
+  }
+};
+
+const autoRepriceToggle = async () => {
+  try {
+    renderAuto(await put('/api/market/reprice/auto', { enabled: $('autoRepriceOn').checked }));
+    showMsg('autoRepriceMsg', $('autoRepriceOn').checked ? 'Авто-демпинг включён.' : 'Выключен.', 'info');
+  } catch (e) {
+    $('autoRepriceOn').checked = !$('autoRepriceOn').checked;
+    showMsg('autoRepriceMsg', e.message, 'err');
+  }
+};
+
+const autoRepriceAdd = async () => {
+  const cardId = $('cardId').value.replace(/\D/g, '');
+  const sku = $('repriceSku').value.trim();
+  const floor = $('repriceFloor').value;
+  const step = $('repriceStep').value || '1';
+  if (!cardId || !sku)
+    return showMsg('autoRepriceMsg', 'Нужны номер карточки и артикул (проверьте карточку выше).', 'err');
+  if (!floor) return showMsg('autoRepriceMsg', 'Укажите минимальную цену (пол).', 'err');
+  try {
+    renderAuto(
+      await post('/api/market/reprice/auto/product', { cardId, sku, floor: Number(floor), step: Number(step) }),
+    );
+    showMsg('autoRepriceMsg', 'Товар добавлен в авто-демпинг.', 'ok');
+  } catch (e) {
+    showMsg('autoRepriceMsg', e.message, 'err');
+  }
+};
+
+const autoRepriceRemove = async (cardId, sku) => {
+  try {
+    renderAuto(await del('/api/market/reprice/auto/product', { cardId, sku }));
+  } catch (e) {
+    showMsg('autoRepriceMsg', e.message, 'err');
+  }
+};
+
+const autoRepriceRun = async () => {
+  showMsg('autoRepriceMsg', 'Проверяем цены…', 'info');
+  try {
+    const r = await post('/api/market/reprice/auto/run', {});
+    renderAuto(r);
+    showMsg('autoRepriceMsg', `Изменено ${r.applied}, без изменений ${r.unchanged}, ошибок ${r.failed}.`, 'ok');
+  } catch (e) {
+    showMsg('autoRepriceMsg', e.message, 'err');
   }
 };
 
