@@ -25,6 +25,10 @@ const empty = () => ({
   settings: defaultSettings(),
   mcSession: null,
   merchantUid: null,
+  // Токен API продавца — запечатанный; на сервере, чтобы не зависеть от браузера
+  marketToken: null,
+  tokenHint: null,
+  tokenMerchantUid: null,
   needLogin: false,
   lastRunMs: null,
   cards: {},
@@ -127,6 +131,16 @@ export const setSession = (mcSession, merchantUid) => {
   state.needLogin = false;
   write();
 };
+
+export const setToken = (marketToken, tokenHint, merchantUid) => {
+  read();
+  state.marketToken = marketToken || null;
+  state.tokenHint = tokenHint || null;
+  state.tokenMerchantUid = merchantUid || null;
+  write();
+};
+
+export const clearToken = () => setToken(null, null, null);
 
 export const clearSession = () => {
   read();

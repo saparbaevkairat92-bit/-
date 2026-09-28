@@ -6,6 +6,7 @@
 
 import { encryptSecret, decryptSecret } from '../crypto.js';
 import { diagnose } from './loginHelpers.js';
+import * as shopStore from './shopStore.js';
 
 export const seal = (obj) => encryptSecret(Buffer.from(JSON.stringify(obj), 'utf8'));
 export const unseal = (blob) => JSON.parse(decryptSecret(blob).toString('utf8'));
@@ -55,6 +56,16 @@ export const readTokenAuth = (req) => {
   }
   const token = req.headers['x-kaspi-token'];
   if (token) return { token: String(token).trim(), merchantUid: req.headers['x-merchant-uid'] || null };
+  // Браузер без токена (другое устройство, очищенная память) — берём сохранённый на сервере
+  const saved = shopStore.getState().marketToken;
+  if (saved) {
+    try {
+      const { token: t, merchantUid } = unseal(saved);
+      return { token: t, merchantUid: merchantUid || null };
+    } catch {
+      return null;
+    }
+  }
   return null;
 };
 
