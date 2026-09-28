@@ -14,7 +14,13 @@ const seen = [];
 const fakeKaspi = (req, res) => {
   const u = new URL(req.url, 'http://x');
   const tok = req.headers['x-auth-token'];
-  seen.push({ path: u.pathname, query: Object.fromEntries(u.searchParams), tok });
+  seen.push({
+    path: u.pathname,
+    query: Object.fromEntries(u.searchParams),
+    tok,
+    ua: req.headers['user-agent'],
+    bearer: req.headers.authorization,
+  });
   res.setHeader('Content-Type', 'application/json');
   if (tok === 'hang') return; // Kaspi молчит — ответа не будет никогда
   if (tok === 'bad') {
@@ -75,6 +81,9 @@ describe('токен API продавца', () => {
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.verified, true);
     assert.deepEqual(seen[0].query, { 'page[number]': '0', 'page[size]': '1' });
+    // Как у рабочей синхронизации NS WMS: браузерный User-Agent и Bearer
+    assert.match(seen[0].ua, /Mozilla\/5\.0/);
+    assert.equal(seen[0].bearer, 'Bearer good');
   });
 
   it('если Kaspi ответил не «неверный токен», токен всё равно сохраняется с предупреждением', async () => {

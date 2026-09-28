@@ -36,8 +36,17 @@ const friendly = (status, body) => {
   return msg ? `Kaspi: ${msg}` : `Kaspi ответил HTTP ${status}`;
 };
 
+// Заголовки — как у рабочей синхронизации NS WMS с Kaspi: браузерный
+// User-Agent (без него часть сетей и WAF Kaspi держат запрос до таймаута),
+// Authorization: Bearer и Connection: close
+export const KASPI_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 NS-WMS-KaspiSync/1';
+
 export const authHeaders = ({ token, merchantUid }) => ({
-  'X-Auth-Token': token,
+  'X-Auth-Token': String(token || '').trim(),
+  Authorization: `Bearer ${String(token || '').trim()}`,
+  'User-Agent': KASPI_UA,
+  Connection: 'close',
   ...(merchantUid ? { 'X-Merchant-Uid': String(merchantUid) } : {}),
 });
 
