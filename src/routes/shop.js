@@ -80,6 +80,12 @@ router.put('/settings', (req, res) => {
   }
 });
 
+// Выход из кабинета: фон (демпинг, чат) больше не действует от имени магазина
+router.post('/cabinet/logout', (req, res) => {
+  store.clearSession();
+  res.json({ connected: false });
+});
+
 router.get('/log', (req, res) => {
   const log = store.recentLog(Number(req.query.limit) || 100, req.query.kind || null);
   res.json({ log: log.map((r) => ({ ...r, name: r.sku ? store.getCard(r.sku)?.name || null : null })) });

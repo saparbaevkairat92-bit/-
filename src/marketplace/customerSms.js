@@ -67,7 +67,8 @@ const maskSecret = (v) => {
 // Что можно отдать в браузер: ключ SMS-сервиса — только хвостом
 export const publicConfig = (cfg) => ({
   enabled: !!cfg.enabled,
-  channel: CHANNELS.includes(cfg.channel) ? cfg.channel : 'sms',
+  // Канала нет в старых настройках — там уже работали SMS; новому магазину — чат Kaspi
+  channel: CHANNELS.includes(cfg.channel) ? cfg.channel : cfg.apiKey ? 'sms' : 'chat',
   provider: cfg.provider || 'mobizon',
   login: cfg.login || '',
   apiKeySet: !!cfg.apiKey,
