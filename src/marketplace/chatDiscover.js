@@ -1,19 +1,21 @@
 // ─── Поиск API чата кабинета Kaspi (диагностика, только чтение) ───
 //
 // Чат с покупателем — внутренняя функция кабинета, Kaspi её не документирует.
-// Чтобы не гадать адрес (это сообщения живым покупателям), находим его безопасно:
-// через уже открытую сессию скачиваем HTML и JS самого кабинета и вытаскиваем
-// строки, похожие на адреса чата. Ничего не отправляем — только GET статики.
+// Чтобы не гадать адрес отправки (это сообщения живым покупателям), находим его
+// безопасно: через сессию скачиваем HTML и JS кабинета (в т.ч. бандл виджета
+// чата) и достаём куски кода вокруг `sendText` — по ним видно и адрес, и тело.
+// Ничего не отправляем — только GET статики.
 
 import fetch from 'node-fetch';
 import { CABINET_URL, CABINET_HOME_URL, BROWSER_UA } from './config.js';
 import { cookieHeader } from './cookies.js';
 
-const MAX_SCRIPTS = 12;
-const MAX_JS_BYTES = 4_000_000;
+const MAX_SCRIPTS = 16;
+const MAX_CHUNKS = 12;
+const MAX_JS_BYTES = 6_000_000;
 
-const get = async (url, jar, accept) => {
-  const resp = await fetch(url, {
+const get = (url, jar, accept) =>
+  fetch(url, {
     headers: {
       'User-Agent': BROWSER_UA,
       Accept: accept,
@@ -21,76 +23,103 @@ const get = async (url, jar, accept) => {
       ...(jar && Object.keys(jar).length ? { Cookie: cookieHeader(jar) } : {}),
     },
   });
-  return resp;
-};
 
 // Слова, по которым узнаём чат/сообщения в коде кабинета
-const KEYWORDS = /(chat|message|dialog|conversation|messeng|unread|im[-_/]|thread)/i;
+const KEYWORDS = /(chat|message|dialog|conversation|messeng|unread|sendText|thread|group)/i;
 
-// Из текста JS вытащить строковые литералы, похожие на адреса/операции чата
-const extractCandidates = (text) => {
-  const found = new Set();
-  // Пути и opName в кавычках
-  const strRe = /["'`]([^"'`]{3,120})["'`]/g;
+// Строковые литералы, похожие на адреса/операции чата
+const extractCandidates = (text, into) => {
+  const strRe = /["'`]([^"'`]{3,140})["'`]/g;
   let m;
   while ((m = strRe.exec(text)) !== null) {
     const s = m[1];
     if (!KEYWORDS.test(s)) continue;
-    // Похоже на путь, URL, GraphQL-операцию или шаблон
-    if (/[/?=]/.test(s) || /^[A-Za-z][A-Za-z0-9]+$/.test(s)) found.add(s.trim());
-    if (found.size > 200) break;
+    if (/[/?=]/.test(s) || /^[A-Za-z][A-Za-z0-9]+$/.test(s)) into.add(s.trim());
+    if (into.size > 300) break;
   }
-  return found;
+};
+
+// Куски кода вокруг важных слов — по ним видно, как строится URL и тело запроса
+const extractSnippets = (text, into) => {
+  for (const needle of ['sendText', 'chats/api/mobile', 'getDiffGroups', 'loadMoreMessages']) {
+    let from = 0;
+    for (let n = 0; n < 6; n++) {
+      const i = text.indexOf(needle, from);
+      if (i < 0) break;
+      const snip = text.slice(Math.max(0, i - 140), i + 140).replace(/\s+/g, ' ');
+      into.add(snip);
+      from = i + needle.length;
+      if (into.size > 60) return;
+    }
+  }
+};
+
+// Ссылки на .js-чанки внутри бандла (в т.ч. виджет чата)
+const extractChunkUrls = (text, base) => {
+  const urls = new Set();
+  const re = /["'`]([^"'`]*(?:webchat|chat|widget|messeng)[^"'`]*\.js)["'`]/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    try {
+      urls.add(new URL(m[1], base).toString());
+    } catch {
+      /* пропускаем битые */
+    }
+    if (urls.size > MAX_CHUNKS) break;
+  }
+  return urls;
 };
 
 export const discoverChat = async (jar) => {
   const scanned = [];
   const candidates = new Set();
+  const snippets = new Set();
   const errors = [];
 
-  // 1. HTML кабинета — из него берём адреса JS-бандлов
-  let html = '';
-  try {
-    const r = await get(CABINET_HOME_URL, jar, 'text/html,application/xhtml+xml');
-    scanned.push({ url: CABINET_HOME_URL, status: r.status });
-    html = await r.text();
-  } catch (err) {
-    errors.push(`HTML: ${err.message}`);
-  }
+  const scan = async (url, accept) => {
+    try {
+      const r = await get(url, jar, accept);
+      const text = (await r.text()).slice(0, MAX_JS_BYTES);
+      scanned.push({ url, status: r.status, bytes: text.length });
+      extractCandidates(text, candidates);
+      extractSnippets(text, snippets);
+      return text;
+    } catch (err) {
+      errors.push(`${url}: ${err.message}`);
+      return '';
+    }
+  };
 
-  // Прямо в HTML тоже могут быть подсказки
-  for (const c of extractCandidates(html)) candidates.add(c);
+  // 1. HTML кабинета
+  const html = await scan(CABINET_HOME_URL, 'text/html,application/xhtml+xml');
 
-  // 2. Собираем адреса скриптов (src="...") и абсолютим их
-  const scripts = [];
+  // 2. Скрипты из HTML
+  const scripts = new Set();
   const srcRe = /<script[^>]+src=["']([^"']+)["']/gi;
   let sm;
   while ((sm = srcRe.exec(html)) !== null) {
     try {
-      scripts.push(new URL(sm[1], CABINET_HOME_URL).toString());
+      scripts.add(new URL(sm[1], CABINET_HOME_URL).toString());
     } catch {
-      /* пропускаем битые src */
-    }
-  }
-  // Часто основной бандл лежит на mc.shop.kaspi.kz — добавим типичные варианты,
-  // если в HTML их не оказалось
-  const uniqScripts = [...new Set(scripts)].slice(0, MAX_SCRIPTS);
-
-  // 3. Скачиваем JS и ищем адреса чата
-  for (const url of uniqScripts) {
-    try {
-      const r = await get(url, jar, '*/*');
-      const text = (await r.text()).slice(0, MAX_JS_BYTES);
-      scanned.push({ url, status: r.status, bytes: text.length });
-      for (const c of extractCandidates(text)) candidates.add(c);
-    } catch (err) {
-      errors.push(`${url}: ${err.message}`);
+      /* skip */
     }
   }
 
-  // Отсортируем: сначала то, что похоже на POST-путь отправки
+  // 3. Скачиваем скрипты и по ходу собираем ссылки на чанк виджета чата
+  const chunkUrls = new Set();
+  for (const url of [...scripts].slice(0, MAX_SCRIPTS)) {
+    const text = await scan(url, '*/*');
+    for (const c of extractChunkUrls(text, url)) chunkUrls.add(c);
+  }
+
+  // 4. Скачиваем чанки чата (второй уровень) — там и лежит sendText
+  for (const url of [...chunkUrls].slice(0, MAX_CHUNKS)) {
+    if (scanned.some((s) => s.url === url)) continue;
+    await scan(url, '*/*');
+  }
+
   const list = [...candidates].sort((a, b) => {
-    const score = (s) => (/(send|create|post|new)/i.test(s) ? 0 : 1) + (/[/]/.test(s) ? 0 : 1);
+    const score = (s) => (/(sendtext|send|create|post|new)/i.test(s) ? 0 : 1) + (/[/]/.test(s) ? 0 : 1);
     return score(a) - score(b);
   });
 
@@ -98,8 +127,9 @@ export const discoverChat = async (jar) => {
     home: CABINET_HOME_URL,
     origin: CABINET_URL,
     scannedScripts: scanned,
+    sendTextSnippets: [...snippets], // куски кода вокруг sendText — главное
     candidates: list.slice(0, 120),
     errors,
-    hint: 'Пришлите этот список разработчику — по нему видно адрес чата, а сообщения покупателям не отправлялись.',
+    hint: 'Пришлите разработчику sendTextSnippets и candidates. Сообщения покупателям не отправлялись — только чтение кода.',
   };
 };
