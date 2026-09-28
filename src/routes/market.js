@@ -3,6 +3,7 @@ import { encryptSecret, decryptSecret } from '../crypto.js';
 import * as merchantApi from '../marketplace/merchantApi.js';
 import * as cabinet from '../marketplace/cabinet.js';
 import { cardCompetitors } from '../marketplace/catalog.js';
+import { computeReprice, RepriceError } from '../marketplace/reprice.js';
 import { normalizeOrder, normalizeEntry, normalizeOffer } from '../marketplace/normalize.js';
 import { diagnose } from '../marketplace/loginHelpers.js';
 import * as customerSms from '../marketplace/customerSms.js';
@@ -273,6 +274,47 @@ router.get('/cards/:cardId/competitors', async (req, res) => {
     req.query.merchantId || (cab && !cab.invalid && cab.merchantUid) || (token && !token.invalid && token.merchantUid);
   try {
     res.json(await cardCompetitors(req.params.cardId, { merchantId, cityId: req.query.cityId || undefined }));
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+// ═══ Демпинг: рассчитать/поставить цену против конкурентов (кабинет) ═══
+// Конкуренты — с витрины, цена ставится через сессию кабинета. floor обязателен.
+router.post('/reprice', requireCabinet, async (req, res) => {
+  const { cardId, sku, floor, step, cityId, apply, model } = req.body || {};
+  const merchantId = req.cabinet.merchantUid;
+  if (!cardId) return res.status(400).json({ error: 'Не указан номер карточки.' });
+  if (apply && !sku) return res.status(400).json({ error: 'Не указан артикул (sku) для смены цены.' });
+  try {
+    const competitors = await cardCompetitors(String(cardId), { merchantId, cityId: cityId || undefined });
+    let recommendation;
+    try {
+      recommendation = computeReprice({
+        offers: competitors.offers,
+        ourMerchantId: merchantId,
+        floor,
+        step: step === undefined ? 1 : step,
+        currentPrice: competitors.ours?.[0]?.price ?? null,
+      });
+    } catch (err) {
+      if (err instanceof RepriceError) return res.status(400).json({ error: err.message });
+      throw err;
+    }
+
+    let applied = null;
+    if (apply && recommendation.recommended && recommendation.changed) {
+      const { jar } = await cabinet.updateOffer(req.cabinet.jar, {
+        merchantUid: merchantId,
+        sku,
+        model,
+        price: recommendation.recommended,
+        cityId,
+      });
+      refreshCabinet(req, res, jar);
+      applied = recommendation.recommended;
+    }
+    res.json({ recommendation, applied, competitors });
   } catch (err) {
     fail(res, err);
   }

@@ -499,8 +499,47 @@ const loadCompetitors = async () => {
         </div>`,
         )
         .join('');
+    // Демпинг доступен только при входе в кабинет (там меняется цена)
+    if (getState().mcSession) {
+      $('repriceBox').classList.remove('hidden');
+      if (r.ours[0]?.merchantSku) $('repriceSku').value = r.ours[0].merchantSku;
+      showMsg('repriceMsg', '', '');
+    } else {
+      $('repriceBox').classList.add('hidden');
+    }
   } catch (e) {
     list.innerHTML = `<div class="status-bar status-err">${esc(e.message)}</div>`;
+    $('repriceBox').classList.add('hidden');
+  }
+};
+
+// Демпинг: рассчитать (apply=false) или поставить цену (apply=true)
+const reprice = async (apply) => {
+  const cardId = $('cardId').value.replace(/\D/g, '');
+  const sku = $('repriceSku').value.trim();
+  const floor = $('repriceFloor').value;
+  const step = $('repriceStep').value || '1';
+  if (!cardId) return showMsg('repriceMsg', 'Сначала укажите номер карточки и нажмите «Проверить».', 'err');
+  if (!floor) return showMsg('repriceMsg', 'Укажите минимальную цену (пол).', 'err');
+  if (apply && !sku) return showMsg('repriceMsg', 'Укажите артикул (sku) товара.', 'err');
+  showMsg('repriceMsg', apply ? 'Ставим цену…' : 'Считаем…', 'info');
+  try {
+    const r = await post('/api/market/reprice', { cardId, sku, floor: Number(floor), step: Number(step), apply });
+    const rec = r.recommendation;
+    if (!rec.recommended) return showMsg('repriceMsg', rec.reason || 'Менять нечего.', 'info');
+    const cheapest = `дешёвый конкурент ${money(rec.cheapestCompetitor)}${rec.cheapestCompetitorName ? ` (${esc(rec.cheapestCompetitorName)})` : ''}`;
+    const state = rec.capped
+      ? `упёрлись в пол ${money(rec.floor)} — дешевле нельзя без убытка`
+      : rec.willBeCheapest
+        ? 'будем самыми дешёвыми'
+        : 'на уровне конкурента';
+    let msg = `Рекомендуемая цена: ${money(rec.recommended)} (${cheapest}, ${state}).`;
+    if (r.applied)
+      msg = `Цена ${money(r.applied)} отправлена в Kaspi. На витрине обновится за несколько минут. ${cheapest}.`;
+    else if (apply && !rec.changed) msg = `Цена уже ${money(rec.recommended)} — менять не нужно.`;
+    showMsg('repriceMsg', msg, r.applied ? 'ok' : 'info');
+  } catch (e) {
+    showMsg('repriceMsg', e.message, 'err');
   }
 };
 

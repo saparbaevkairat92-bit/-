@@ -225,6 +225,31 @@
             <button class="btn btn-secondary" style="margin: 0" onclick="loadCompetitors()">Проверить</button>
           </div>
           <div id="competitorsList" style="margin-top: 12px"></div>
+
+          <div id="repriceBox" class="hidden" style="margin-top: 8px; border-top: 1px solid #eee; padding-top: 12px">
+            <h2 style="font-size: 16px">Демпинг — цена против конкурентов</h2>
+            <p class="muted">
+              Поставим цену на «шаг» ниже самого дешёвого конкурента, но не ниже вашего минимума (пола), чтобы не уйти в
+              убыток. Меняет цену в кабинете, поэтому нужен вход в кабинет.
+            </p>
+            <div class="row">
+              <div style="flex: 1">
+                <label>Артикул (sku)</label>
+                <input type="text" id="repriceSku" />
+              </div>
+              <div style="flex: 1">
+                <label>Мин. цена, ₸ (пол)</label>
+                <input type="number" id="repriceFloor" min="1" inputmode="numeric" />
+              </div>
+            </div>
+            <label>Шаг ниже конкурента, ₸</label>
+            <input type="number" id="repriceStep" min="0" value="1" inputmode="numeric" />
+            <div class="row" style="margin-top: 8px">
+              <button class="btn btn-secondary" style="margin: 0" onclick="reprice(false)">Рассчитать цену</button>
+              <button class="btn btn-primary" style="margin: 0" onclick="reprice(true)">Поставить цену</button>
+            </div>
+            <div id="repriceMsg" class="hidden" style="margin-top: 8px"></div>
+          </div>
         </div>
       </div>
 
