@@ -745,6 +745,13 @@ const loadSms = async () => {
     .map((p) => `<option value="${esc(p.id)}"${p.id === c.provider ? ' selected' : ''}>${esc(p.label)}</option>`)
     .join('');
   $('smsProvider').onchange = smsProviderChange;
+  $('smsChannel').innerHTML = (smsData.channels || [])
+    .map((ch) => `<option value="${ch.id}">${esc(ch.label)}</option>`)
+    .join('');
+  $('smsChannel').value = c.channel || 'sms';
+  $('smsChannelHint').textContent = smsData.chatConnected
+    ? 'Сессия кабинета для чата сохранена.'
+    : 'Для чата Kaspi войдите в кабинет продавца (вкладка «Товары») — сообщение уходит от имени кабинета.';
   $('smsEnabled').checked = c.enabled;
   $('smsNew').checked = c.notifyNew;
   $('smsIssued').checked = c.notifyIssued;
@@ -769,6 +776,7 @@ const smsProviderChange = () => {
 };
 
 const smsFormBody = () => ({
+  channel: $('smsChannel').value || 'sms',
   provider: $('smsProvider').value,
   login: $('smsLogin').value.trim(),
   apiKey: $('smsKey').value.trim(),
@@ -783,7 +791,7 @@ const smsFormBody = () => ({
 const smsSave = async (extra) => {
   showMsg('smsMsg', 'Сохраняем…', 'info');
   try {
-    const r = await post('/api/market/sms', { ...smsFormBody(), ...(extra || {}) });
+    const r = await put('/api/market/sms', { ...smsFormBody(), ...(extra || {}) });
     smsData.config = r.config;
     $('smsKey').value = '';
     showMsg('smsMsg', r.config.enabled ? 'Сохранено. SMS будут уходить автоматически.' : 'Сохранено', 'ok');

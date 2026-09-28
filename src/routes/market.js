@@ -12,6 +12,7 @@ import * as customerSms from '../marketplace/customerSms.js';
 import * as smsStore from '../marketplace/autoSmsStore.js';
 import { runOnce as smsRunOnce, sendTest as smsSendTest } from '../marketplace/autoSmsPoller.js';
 import { discoverChat } from '../marketplace/chatDiscover.js';
+import { sendChatMessage, ChatError } from '../marketplace/kaspiChat.js';
 
 // ═══════════════════════════════════════════════════
 //  Kaspi Маркетплейс — /api/market/*
@@ -135,6 +136,7 @@ router.get('/capabilities', (req, res) => {
       waybill: hasToken,
       offers: hasCabinet,
       offerUpdate: hasCabinet,
+      chat: hasCabinet,
       competitors: true,
     },
   });
@@ -454,6 +456,8 @@ router.get('/sms', (req, res) => {
   res.json({
     config: customerSms.publicConfig(st.config),
     tokenConnected: !!st.marketToken,
+    chatConnected: !!st.mcSession,
+    channels: customerSms.CHANNELS.map((id) => ({ id, label: customerSms.CHANNEL_LABELS[id] })),
     providers: customerSms.PROVIDERS.map((id) => ({ id, label: customerSms.PROVIDER_LABELS[id] })),
     placeholders: customerSms.PLACEHOLDERS,
     log: smsStore.recentLog(),
@@ -472,6 +476,14 @@ router.put('/sms', (req, res) => {
       const sealedHeader = req.headers['x-market-token'];
       if (sealedHeader) smsStore.setToken(sealedHeader, auth.merchantUid);
       else smsStore.setToken(seal({ token: auth.token, merchantUid: auth.merchantUid }), auth.merchantUid);
+      // Чат Kaspi пишется от имени кабинета — нужна его сессия
+      if (customerSms.usesChat(cfg)) {
+        const cab = readCabinet(req);
+        if (cab && !cab.invalid) smsStore.setMcSession(req.headers['x-mc-session']);
+        else if (!smsStore.getState().mcSession) {
+          return res.status(400).json({ error: 'Для чата Kaspi войдите в кабинет продавца по телефону.' });
+        }
+      }
     }
     smsStore.setConfig(cfg);
     res.json({ config: customerSms.publicConfig(cfg) });
@@ -501,6 +513,48 @@ router.post('/sms/run', async (req, res) => {
     res.json({ ...stats, log: smsStore.recentLog() });
   } catch (err) {
     res.status(502).json({ error: `Не удалось опросить заказы: ${err.message}` });
+  }
+});
+
+// ═══ Чат Kaspi: сообщение покупателю по заказу (кабинет) ═══
+// Внешняя система (NS WMS) хранит сессию сама и шлёт её в X-Mc-Session; в ответ
+// получает продлённую сессию в том же заголовке.
+
+const chatFail = (res, err) => {
+  if (err instanceof ChatError) {
+    return res.status(err.status || 502).json({ error: err.message, details: { trace: err.trace } });
+  }
+  return fail(res, err);
+};
+
+router.post('/chat/send', requireCabinet, async (req, res) => {
+  const { orderCode, text, phone } = req.body || {};
+  try {
+    const r = await sendChatMessage(req.cabinet.jar, {
+      orderCode,
+      text,
+      phone,
+      merchantUid: req.cabinet.merchantUid,
+    });
+    refreshCabinet(req, res, r.jar);
+    res.json({ sent: true, chatId: r.chatId, trace: r.trace });
+  } catch (err) {
+    chatFail(res, err);
+  }
+});
+
+// Проверка без отправки: находится ли чат по номеру заказа
+router.post('/chat/probe', requireCabinet, async (req, res) => {
+  try {
+    const r = await sendChatMessage(req.cabinet.jar, {
+      orderCode: req.body?.orderCode,
+      merchantUid: req.cabinet.merchantUid,
+      dryRun: true,
+    });
+    refreshCabinet(req, res, r.jar);
+    res.json({ found: true, chatId: r.chatId, trace: r.trace });
+  } catch (err) {
+    chatFail(res, err);
   }
 });
 

@@ -22,6 +22,13 @@ export const EVENT_STATUSES = {
 };
 
 export const PROVIDERS = ['mobizon', 'smsc'];
+
+// Куда пишем покупателю: в чат Kaspi (через кабинет), SMS-сервисом, или в чат,
+// а если чат не вышел — SMS
+export const CHANNELS = ['chat', 'sms', 'chat_sms'];
+export const CHANNEL_LABELS = { chat: 'Чат Kaspi', sms: 'SMS', chat_sms: 'Чат Kaspi, если не вышло — SMS' };
+export const usesChat = (cfg) => cfg.channel === 'chat' || cfg.channel === 'chat_sms';
+export const usesSms = (cfg) => !cfg.channel || cfg.channel === 'sms' || cfg.channel === 'chat_sms';
 export const PROVIDER_LABELS = { mobizon: 'Mobizon', smsc: 'SMSC.kz' };
 
 export const DEFAULT_TEMPLATES = {
@@ -39,6 +46,7 @@ export class SmsError extends Error {}
 
 export const defaultConfig = () => ({
   enabled: false,
+  channel: 'sms',
   provider: 'mobizon',
   login: '',
   apiKey: '',
@@ -59,6 +67,7 @@ const maskSecret = (v) => {
 // Что можно отдать в браузер: ключ SMS-сервиса — только хвостом
 export const publicConfig = (cfg) => ({
   enabled: !!cfg.enabled,
+  channel: CHANNELS.includes(cfg.channel) ? cfg.channel : 'sms',
   provider: cfg.provider || 'mobizon',
   login: cfg.login || '',
   apiKeySet: !!cfg.apiKey,
@@ -80,6 +89,11 @@ export const mergeConfig = (old, patch, nowMs) => {
     .toLowerCase();
   if (!PROVIDERS.includes(provider)) throw new SmsError('Неизвестный SMS-сервис. Доступны: Mobizon, SMSC.kz.');
   cfg.provider = provider;
+  if ('channel' in patch) {
+    const channel = String(patch.channel || '').trim();
+    if (!CHANNELS.includes(channel)) throw new SmsError('Неизвестный канал: чат Kaspi, SMS или чат + SMS.');
+    cfg.channel = channel;
+  }
 
   for (const key of ['login', 'sender', 'shopName']) {
     if (key in patch) cfg[key] = String(patch[key] ?? '').slice(0, 64);
@@ -103,8 +117,10 @@ export const mergeConfig = (old, patch, nowMs) => {
   const wasEnabled = !!cfg.enabled;
   if ('enabled' in patch) cfg.enabled = !!patch.enabled;
   if (cfg.enabled) {
-    if (!cfg.apiKey) throw new SmsError('Укажите API-ключ (пароль) SMS-сервиса.');
-    if (provider === 'smsc' && !cfg.login) throw new SmsError('Для SMSC.kz нужен логин.');
+    if (usesSms(cfg)) {
+      if (!cfg.apiKey) throw new SmsError('Укажите API-ключ (пароль) SMS-сервиса.');
+      if (provider === 'smsc' && !cfg.login) throw new SmsError('Для SMSC.kz нужен логин.');
+    }
     // Точка отсчёта: SMS только по заказам после включения
     if (!wasEnabled || !cfg.enabledAtMs) cfg.enabledAtMs = Number(nowMs) || Date.now();
   }

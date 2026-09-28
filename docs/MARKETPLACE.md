@@ -72,6 +72,10 @@ GET  /api/market/orders/{id}/waybill        → PDF
 ```
 
 `state`: `NEW`, `SIGN_REQUIRED`, `PICKUP`, `DELIVERY`, `KASPI_DELIVERY`, `ARCHIVE`.
+
+У каждого заказа есть `tab` — вкладка как в кабинете Kaspi: `packing` (упаковка),
+`transfer` (передача), `delivery` (передано на доставку), `archive` (архив), и
+`deliveryCostForSeller` — точная доставка, которую Kaspi удержит с продавца.
 В позиции заказа есть `cardId` — номер карточки на витрине (не путать с артикулом
 продавца `sku`, числа похожи, но разные).
 
@@ -129,6 +133,38 @@ POST /api/market/sms/run                     → разовый проход (т
 Одно SMS на событие (защита от дублей — журнал по «код заказа + событие»), только
 по заказам после включения, ключ сервиса наружу не отдаётся. Тексты: `{name}`,
 `{order}`, `{shop}`, `{sum}`.
+
+### Чат Kaspi — сообщение покупателю от имени магазина (кабинет)
+
+Чат — функция кабинета (виджет `webchat-widget`), через токен её нет. Сервер
+находит чат заказа и пишет в него, с cookie кабинета (`X-Mc-Session`, в ответе —
+продлённая сессия):
+
+```
+POST /api/market/chat/send   {orderCode, text}   → {sent, chatId, trace[]}
+POST /api/market/chat/probe  {orderCode}         → {found, chatId, trace[]}   (только поиск, без отправки)
+```
+
+API чата Kaspi не документирован. Адреса найдены разбором виджета
+(`/cabinet/discover-chat`): `mc.shop.kaspi.kz/chats/api/mobile` +
+`/api/v1/chat/search` и `/api/v1/messages/sendMessage`. Тела запросов — шаблоны
+JSON, их можно поправить в `.env` без правки кода:
+
+| Переменная               | По умолчанию                                                  |
+| ------------------------ | ------------------------------------------------------------- |
+| `KASPI_CHAT_API_URL`     | `https://mc.shop.kaspi.kz/chats/api/mobile`                   |
+| `KASPI_CHAT_SEARCH_PATH` | `/api/v1/chat/search`                                         |
+| `KASPI_CHAT_SEARCH_BODY` | `{"searchText":"{order}"}`                                    |
+| `KASPI_CHAT_SEND_PATH`   | `/api/v1/messages/sendMessage`                                |
+| `KASPI_CHAT_SEND_BODY`   | `{"groupId":"{chatId}","text":"{text}","messageType":"TEXT"}` |
+| `KASPI_CHAT_CREATE_PATH` | пусто (создание чата выключено)                               |
+
+Подстановки: `{order}`, `{text}`, `{chatId}`, `{phone}`, `{merchantUid}`. Перед
+первой рассылкой проверьте `/chat/probe` на реальном заказе: в `trace` видно, что
+ответил Kaspi на каждом шаге.
+
+Авто-сообщения (`/api/market/sms`) умеют канал `channel`: `chat` — в чат Kaspi,
+`sms` — SMS-сервисом, `chat_sms` — в чат, а если не вышло — SMS.
 
 ### Конкуренты (витрина)
 

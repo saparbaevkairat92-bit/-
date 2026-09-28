@@ -82,3 +82,15 @@ describe('dueEvents', () => {
     assert.deepEqual(dueEvents({ notifyIssued: false }), [EVENT_NEW]);
   });
 });
+
+describe('channel — чат Kaspi или SMS', () => {
+  it('chat-only does not need an SMS key', () => {
+    const cfg = mergeConfig({}, { enabled: true, channel: 'chat' }, 1);
+    assert.equal(cfg.channel, 'chat');
+    assert.equal(publicConfig(cfg).channel, 'chat');
+  });
+  it('SMS and chat+SMS still need the key', () => {
+    assert.throws(() => mergeConfig({}, { enabled: true, channel: 'chat_sms' }, 1), SmsError);
+    assert.throws(() => mergeConfig({}, { enabled: true, channel: 'fax' }, 1), SmsError);
+  });
+});
