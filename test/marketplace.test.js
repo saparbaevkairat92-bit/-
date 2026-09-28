@@ -9,6 +9,7 @@ import {
   normalizeOffer,
   buildOfferUpdate,
   normalizeCardOffer,
+  parseCardId,
 } from '../src/marketplace/normalize.js';
 
 describe('cookies', () => {
@@ -202,5 +203,28 @@ describe('normalizeOffer — карточка и фото', () => {
       normalizeOffer({ images: ['h1/h2/p.jpg'] }).image,
       /^https:\/\/resources\.cdn-kaspi\.kz\/.*h1\/h2\/p\.jpg$/,
     );
+  });
+});
+
+describe('фото и номер карточки — любые поля кабинета', () => {
+  it('находит фото в неизвестном поле и в относительном пути CDN', () => {
+    assert.equal(
+      normalizeOffer({ media: { gallery: [{ url: 'https://resources.cdn-kaspi.kz/img/m/p/h1/h2/1.jpg' }] } }).image,
+      'https://resources.cdn-kaspi.kz/img/m/p/h1/h2/1.jpg',
+    );
+    assert.equal(
+      normalizeOffer({ primaryImage: { large: 'h32/h70/84.jpg' } }).image,
+      'https://resources.cdn-kaspi.kz/img/m/p/h32/h70/84.jpg',
+    );
+    assert.equal(normalizeOffer({ title: 'без фото' }).image, null);
+  });
+  it('номер карточки из ссылки где угодно и из вставленного текста', () => {
+    assert.equal(
+      normalizeOffer({ links: { card: 'https://kaspi.kz/shop/p/naushniki-113677582/' } }).cardId,
+      '113677582',
+    );
+    assert.equal(parseCardId('https://kaspi.kz/shop/p/apple-airpods-113677582/?c=750000000'), '113677582');
+    assert.equal(parseCardId('113677582'), '113677582');
+    assert.equal(parseCardId('abc'), null);
   });
 });

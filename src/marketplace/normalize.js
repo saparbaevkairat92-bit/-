@@ -127,31 +127,86 @@ export const normalizeOffer = (o) => {
     brand: o?.brand ?? null,
     category: o?.category ?? o?.categoryName ?? null,
     image: offerImage(o),
-    cardUrl: o?.shopLink ?? o?.productUrl ?? null,
+    cardUrl: o?.shopLink ?? o?.productUrl ?? (offerCardId(o) ? `https://kaspi.kz/shop/p/-${offerCardId(o)}/` : null),
   };
 };
 
-// Фото товара: в кабинете бывает строкой, объектом {url|large|medium} или
-// относительным путём CDN Kaspi
+// Фото товара. Кабинет не документирован и менял имена полей, поэтому сначала
+// известные поля, потом — поиск по всему объекту: любое поле с «image/img/
+// photo/picture» в имени или строка, похожая на картинку CDN Kaspi.
 export const KASPI_IMG_CDN = 'https://resources.cdn-kaspi.kz/img/m/p/';
-export const offerImage = (o) => {
-  let v = o?.images?.[0] ?? o?.image ?? o?.imageUrl ?? o?.primaryImage ?? null;
-  if (v && typeof v === 'object') v = v.large ?? v.medium ?? v.url ?? v.small ?? null;
+const IMG_KEY = /(image|img|photo|picture|preview|thumb)/i;
+const IMG_VAL = /(cdn-kaspi|\.(jpe?g|png|webp)(\?|$))/i;
+
+const imageUrl = (v) => {
   if (!v) return null;
-  const s = String(v);
+  if (typeof v === 'object') {
+    v = v.large ?? v.medium ?? v.url ?? v.small ?? v.link ?? v.src ?? v.path ?? null;
+    if (!v || typeof v === 'object') return null;
+  }
+  const s = String(v).trim();
+  if (!s) return null;
   if (/^https?:\/\//.test(s)) return s;
   if (s.startsWith('//')) return `https:${s}`;
-  return KASPI_IMG_CDN + s.replace(/^\/+/, '');
+  if (/^\/?img\//.test(s)) return `https://resources.cdn-kaspi.kz/${s.replace(/^\/+/, '')}`;
+  // Относительный путь CDN: h32/h70/84378448199710.jpg
+  if (/^\/?[\w-]+\/[\w-]+\/[\w.-]+\.(jpe?g|png|webp)/i.test(s)) return KASPI_IMG_CDN + s.replace(/^\/+/, '');
+  return null;
 };
 
-// Номер карточки витрины у товара кабинета: masterSku / productCode, либо цифры
-// в конце ссылки на карточку (…/p/название-123456789/)
+const findImage = (node, depth = 0) => {
+  if (!node || depth > 4) return null;
+  if (Array.isArray(node)) {
+    for (const x of node) {
+      const r = typeof x === 'string' ? (IMG_VAL.test(x) ? imageUrl(x) : null) : findImage(x, depth + 1);
+      if (r) return r;
+    }
+    return null;
+  }
+  if (typeof node !== 'object') return null;
+  for (const [k, v] of Object.entries(node)) {
+    if (IMG_KEY.test(k)) {
+      const r = Array.isArray(v) ? findImage(v, depth + 1) || imageUrl(v[0]) : imageUrl(v);
+      if (r) return r;
+    }
+  }
+  for (const v of Object.values(node)) {
+    if (typeof v === 'string' && IMG_VAL.test(v)) {
+      const r = imageUrl(v);
+      if (r) return r;
+    } else if (v && typeof v === 'object') {
+      const r = findImage(v, depth + 1);
+      if (r) return r;
+    }
+  }
+  return null;
+};
+
+export const offerImage = (o) =>
+  imageUrl(o?.images?.[0]) ?? imageUrl(o?.image) ?? imageUrl(o?.imageUrl) ?? imageUrl(o?.primaryImage) ?? findImage(o);
+
+// Номер карточки витрины у товара кабинета: известные поля, затем цифры в
+// конце ссылки на карточку (…/shop/p/название-123456789/) где угодно в объекте
+const CARD_KEYS = ['masterSku', 'productCode', 'productId', 'masterProductId', 'kaspiProductCode', 'cardId'];
+const CARD_LINK = /\/shop\/p\/[^"'\s]*-(\d{5,})\/?/;
+
 export const offerCardId = (o) => {
-  for (const v of [o?.masterSku, o?.productCode, o?.productId]) {
+  for (const k of CARD_KEYS) {
+    const v = o?.[k];
     if (v !== undefined && v !== null && /^\d{5,}$/.test(String(v))) return String(v);
   }
   const link = String(o?.shopLink ?? o?.productUrl ?? '');
   const m = link.match(/-(\d{5,})\/?(?:[?#].*)?$/);
+  if (m) return m[1];
+  const any = o ? JSON.stringify(o).match(CARD_LINK) : null;
+  return any ? any[1] : null;
+};
+
+// Номер карточки из того, что вставил человек: число или ссылка на товар Kaspi
+export const parseCardId = (input) => {
+  const s = String(input || '').trim();
+  if (/^\d{5,}$/.test(s)) return s;
+  const m = s.match(/-(\d{5,})\/?(?:[?#].*)?$/) || s.match(/\/p\/(\d{5,})/);
   return m ? m[1] : null;
 };
 

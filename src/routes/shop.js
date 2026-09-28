@@ -2,7 +2,7 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import * as merchantApi from '../marketplace/merchantApi.js';
 import * as cabinet from '../marketplace/cabinet.js';
-import { normalizeOrder, normalizeEntry, normalizeOffer, ORDER_TABS } from '../marketplace/normalize.js';
+import { normalizeOrder, normalizeEntry, normalizeOffer, parseCardId, ORDER_TABS } from '../marketplace/normalize.js';
 import { ShopError, orderFee, defaultFloor, cardStep, cardFloor } from '../marketplace/shop.js';
 import * as store from '../marketplace/shopStore.js';
 import * as smsStore from '../marketplace/autoSmsStore.js';
@@ -110,7 +110,14 @@ router.post('/sync', requireCabinet, async (req, res) => {
     const seen = new Set();
     const unique = all.filter((o) => o.sku && !seen.has(String(o.sku)) && seen.add(String(o.sku)));
     keepSession(req, res, jar);
-    res.json(store.syncOffers(unique));
+    const stats = store.syncOffers(unique);
+    // Сколько пришло без фото и без номера карточки — видно сразу, а не по пустым квадратам
+    const cards = store.cardsList();
+    res.json({
+      ...stats,
+      noImage: cards.filter((c) => !c.image).length,
+      noCardId: cards.filter((c) => !c.cardId).length,
+    });
   } catch (err) {
     shopFail(res, err);
   }
@@ -200,7 +207,7 @@ router.put('/cards/settings', (req, res) => {
     else if (b.repriceFloor !== undefined) patch.repriceFloor = Math.round(Number(b.repriceFloor));
     if (b.repriceEnabled !== undefined) {
       if (b.repriceEnabled) {
-        if (!c.cardId) {
+        if (!c.cardId && !parseCardId(b.cardId)) {
           problems.push(`${c.name || c.sku}: нет номера карточки`);
         } else {
           // Минимум фиксируется в момент включения — от ТЕКУЩЕЙ цены
@@ -209,6 +216,11 @@ router.put('/cards/settings', (req, res) => {
           else Object.assign(patch, { repriceEnabled: true, repriceFloor: floor });
         }
       } else patch.repriceEnabled = false;
+    }
+    if (b.cardId !== undefined && skus.length === 1) {
+      const id = parseCardId(b.cardId);
+      if (!id) problems.push('Номер карточки — цифры или ссылка на товар Kaspi');
+      else Object.assign(patch, { cardId: id, cardUrl: c.cardUrl || `https://kaspi.kz/shop/p/-${id}/` });
     }
     if (b.msgEnabled !== undefined) patch.msgEnabled = !!b.msgEnabled;
     if (typeof b.msgNew === 'string') patch.msgNew = b.msgNew.trim();
@@ -388,6 +400,15 @@ router.get('/orders', requireToken, async (req, res) => {
       req.market,
       rows.map((o) => o.id),
     );
+    // В заказе у позиции есть номер карточки витрины — дописываем его карточкам,
+    // у которых кабинет его не отдал (без него не работают место и демпинг)
+    for (const list of Object.values(entries)) {
+      for (const e of list) {
+        const c = e.sku && e.cardId ? store.getCard(e.sku) : null;
+        if (c && !c.cardId)
+          store.patchCard(c.sku, { cardId: e.cardId, cardUrl: c.cardUrl || `https://kaspi.kz/shop/p/-${e.cardId}/` });
+      }
+    }
     const settings = store.getSettings();
     const msgs = smsStore.statusesFor(rows.map((o) => o.code));
     const out = rows.map((o) => {

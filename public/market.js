@@ -171,7 +171,7 @@ let orderTimer = null;
 
 const photo = (src, big = false) =>
   src
-    ? `<img class="ph${big ? ' big' : ''}" src="${esc(src)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'ph${big ? ' big' : ''}',textContent:'📦'}))" />`
+    ? `<img class="ph${big ? ' big' : ''}" src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'ph${big ? ' big' : ''}',textContent:'📦'}))" />`
     : `<span class="ph${big ? ' big' : ''}">📦</span>`;
 
 const orderCard = (o) => {
@@ -426,6 +426,10 @@ const loadProducts = async () => {
     products = r.cards;
     pCounts = r.counts;
     renderProducts();
+    if (shopState && !shopState.settings?.repriceEnabled && pCounts.reprice)
+      $('productsWarn').innerHTML += note(
+        'На карточках демпинг включён, но общий «Авто-демпинг работает» выключен в «Настройках» — в фоне цены не меняются (кнопка «Демпинг сейчас» работает).',
+      );
   } catch (e) {
     $('productsWarn').innerHTML = note(esc(e.message), 'err');
   }
@@ -445,6 +449,14 @@ const syncProducts = () =>
   busy($('btnSync'), async () => {
     const r = await post('/api/market/shop/sync');
     toast(`Из кабинета: ${r.total} товаров${r.added ? `, новых ${r.added}` : ''}`);
+    const warn = [];
+    if (r.noImage) warn.push(`без фото: ${r.noImage}`);
+    if (r.noCardId)
+      warn.push(
+        `без номера карточки: ${r.noCardId} (номер подтянется из заказов или впишите его в окне товара — без него нет места и демпинга)`,
+      );
+    $('checkProgress').className = warn.length ? 'note' : 'note hidden';
+    $('checkProgress').textContent = warn.length ? `Кабинет отдал не всё — ${warn.join('; ')}.` : '';
     await loadShopState();
     loadProducts();
   });
@@ -603,7 +615,13 @@ const cardView = (c, offers, compErr) => `
     ${c.cardUrl ? `<br><a href="${esc(c.cardUrl)}" target="_blank" rel="noopener">Открыть на Kaspi ↗</a>` : ''}</div>
   </div>
   <div class="box"><h3>Продавцы на карточке</h3>
-    ${!c.cardId ? note('У товара нет номера карточки — кабинет его не отдал.') : ''}
+    ${
+      !c.cardId
+        ? `${note('Кабинет не отдал номер карточки на витрине. Вставьте ссылку на товар в Kaspi или номер — без него нет места и демпинга.')}
+           <div class="bar"><input type="search" id="cCardId" placeholder="https://kaspi.kz/shop/p/…-123456789/" />
+           <button class="b" onclick="saveCardId(this)">Сохранить</button></div>`
+        : ''
+    }
     ${compErr ? note(esc(compErr), 'err') : ''}
     ${
       offers
@@ -659,6 +677,15 @@ const closeCard = () => {
   cardSku = null;
   loadProducts();
 };
+
+const saveCardId = (btn) =>
+  busy(btn, async () => {
+    const r = await cardSettings([cardSku], { cardId: $('cCardId').value.trim() });
+    if (!r.problems.length) {
+      toast('Номер карточки сохранён');
+      openCard(cardSku);
+    }
+  });
 
 const saveCardPrice = (btn) =>
   busy(btn, async () => {

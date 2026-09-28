@@ -150,7 +150,13 @@ const fakeKaspi = (req, res) => {
     if (/\/api\/orders\/o\d\/entries/.test(u.pathname)) {
       return res.end(
         JSON.stringify({
-          data: [{ attributes: { quantity: 1, basePrice: 6990, offer: { code: 'N1', name: 'Наушники' } } }],
+          data: [
+            { attributes: { quantity: 1, basePrice: 6990, offer: { code: 'N1', name: 'Наушники' } } },
+            {
+              attributes: { quantity: 1, basePrice: 990, offer: { code: 'K2', name: 'Кабель' } },
+              relationships: { product: { data: { id: '200002' } } },
+            },
+          ],
         }),
       );
     }
@@ -255,5 +261,18 @@ describe('/api/market/shop', () => {
     assert.equal(o.items[0].image, 'https://img/n1.jpg');
     assert.equal(o.fee.net, 5189.9);
     assert.equal(o.customer.phone, undefined);
+    // У кабеля кабинет не отдал номер карточки — он пришёл из заказа
+    const k2 = await call('GET', '/api/market/shop/cards?q=K2');
+    assert.equal(k2.body.cards[0].cardId, '200002');
+  });
+
+  it('номер карточки можно вписать вручную ссылкой', async () => {
+    const r = await call('PUT', '/api/market/shop/cards/settings', {
+      skus: ['K2'],
+      cardId: 'https://kaspi.kz/shop/p/kabel-usb-300003/',
+    });
+    assert.equal(r.body.cards[0].cardId, '300003');
+    const bad = await call('PUT', '/api/market/shop/cards/settings', { skus: ['K2'], cardId: 'нет' });
+    assert.equal(bad.body.problems.length, 1);
   });
 });
