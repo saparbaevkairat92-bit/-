@@ -5,7 +5,10 @@
 // настройки берёт из autoSmsStore. Работает независимо от того, открыт ли
 // браузер: пока рассылка включена, сообщения уходят сами.
 
-import { decryptSecret } from '../crypto.js';
+import { decryptSecret, encryptSecret } from '../crypto.js';
+import { sendChatMessage } from './kaspiChat.js';
+import * as shopStore from './shopStore.js';
+import { pickTemplate } from './shop.js';
 import * as merchantApi from './merchantApi.js';
 import * as store from './autoSmsStore.js';
 import {
@@ -17,6 +20,8 @@ import {
   customerPhone,
   maskPhone,
   sendSms,
+  usesChat,
+  usesSms,
 } from './customerSms.js';
 
 const unsealToken = (blob) => {
@@ -28,7 +33,26 @@ const unsealToken = (blob) => {
 };
 
 // Один проход. Вынесен и экспортирован, чтобы «Проверить сейчас» звал ровно его.
-export const runOnce = async ({ fetchOrders } = {}) => {
+// Артикулы заказа → карточки магазина (для своего текста и выключателя)
+const orderCards = async (auth, order, fetchEntries) => {
+  if (!shopStore.cardsList().length || !order.id) return [];
+  try {
+    const entries = await (fetchEntries || ((id) => merchantApi.getOrderEntries(auth, id)))(order.id);
+    const skus = [
+      ...new Set(
+        entries
+          .map((e) => e?.attributes?.offer?.code)
+          .filter(Boolean)
+          .map(String),
+      ),
+    ];
+    return shopStore.cardsBySku(skus);
+  } catch {
+    return [];
+  }
+};
+
+export const runOnce = async ({ fetchOrders, fetchEntries } = {}) => {
   const st = store.getState();
   const cfg = st.config;
   const stats = { sent: 0, failed: 0, skipped: 0 };
@@ -59,22 +83,61 @@ export const runOnce = async ({ fetchOrders } = {}) => {
         // Только заказы после включения рассылки
         if (cfg.enabledAtMs && Number(attrs.creationDate) && Number(attrs.creationDate) < cfg.enabledAtMs) continue;
         if (store.alreadySent(code, event)) continue;
-        await sendOne(cfg, event, code, attrs, templates[event], stats);
+        const pick = pickTemplate(
+          await orderCards({ token: auth.token, merchantUid }, order, fetchEntries),
+          event,
+          templates[event],
+        );
+        if (!pick.send) {
+          store.recordSend({ code, event, status: 'skipped', error: 'рассылка выключена для товара заказа' });
+          stats.skipped += 1;
+          continue;
+        }
+        await sendOne(cfg, event, code, attrs, pick.template, stats);
       }
     }
   }
   return stats;
 };
 
+// Сообщение в чат Kaspi через сохранённую сессию кабинета. Свежие cookie
+// кабинета сразу кладём обратно — иначе сессия «протухнет» быстрее.
+export const sendViaChat = async (code, text, phone) => {
+  // Одна сессия кабинета на сервер — та же, что у авто-демпинга
+  const st = shopStore.getState();
+  const sess = st.mcSession ? unsealToken(st.mcSession) : null;
+  if (!sess || !sess.jar) return { ok: false, detail: 'нет сессии кабинета — войдите в кабинет Kaspi' };
+  try {
+    const r = await sendChatMessage(sess.jar, { orderCode: code, text, phone, merchantUid: sess.merchantUid });
+    shopStore.setSession(encryptSecret(Buffer.from(JSON.stringify({ ...sess, jar: r.jar }), 'utf8')), sess.merchantUid);
+    return { ok: true, detail: 'отправлено в чат', id: r.chatId };
+  } catch (err) {
+    if (err.status === 401) shopStore.markNeedLogin();
+    return { ok: false, detail: `чат Kaspi: ${err.message}` };
+  }
+};
+
 const sendOne = async (cfg, event, code, attrs, template, stats) => {
   const phone = customerPhone(attrs);
-  if (!phone) {
-    store.recordSend({ code, event, status: 'skipped', error: 'в заказе нет номера покупателя' });
-    stats.skipped += 1;
-    return;
-  }
   const text = render(template, orderContext(attrs, cfg.shopName));
-  const { ok, detail, id } = await sendSms(cfg, phone, text);
+  let res = { ok: false, detail: 'канал не выбран' };
+  let channel = 'sms';
+  if (usesChat(cfg)) {
+    channel = 'chat';
+    res = await sendViaChat(code, text, phone);
+  }
+  if (!res.ok && usesSms(cfg)) {
+    if (!phone) {
+      store.recordSend({ code, event, status: 'skipped', error: 'в заказе нет номера покупателя', channel: 'sms' });
+      stats.skipped += 1;
+      return;
+    }
+    const chatError = channel === 'chat' ? res.detail : null;
+    channel = 'sms';
+    res = await sendSms(cfg, phone, text);
+    if (chatError && !res.ok) res.detail = `${chatError}; ${res.detail}`;
+  }
+  const { ok, detail, id } = res;
   store.recordSend({
     code,
     event,
@@ -83,6 +146,7 @@ const sendOne = async (cfg, event, code, attrs, template, stats) => {
     text,
     error: ok ? null : detail,
     messageId: id,
+    channel,
   });
   if (ok) stats.sent += 1;
   else stats.failed += 1;

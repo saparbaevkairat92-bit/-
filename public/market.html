@@ -6,515 +6,822 @@
     <title>Kaspi Маркетплейс</title>
     <link rel="stylesheet" href="style.css" />
     <style>
-      /* .conn и .row задают display — .hidden должен перебивать их */
       .hidden {
         display: none !important;
       }
-      .row {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-      }
-      .row > * {
-        flex: 1;
-      }
-      .muted {
-        font-size: 13px;
-        color: #888;
-      }
-      .conn {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 8px;
-      }
-      .conn .btn {
-        width: auto;
-        margin: 0;
-        padding: 8px 14px;
-        font-size: 13px;
-      }
-      .point {
-        border: 1px solid #eee;
-        border-radius: 10px;
-        padding: 8px 12px;
-        margin-top: 8px;
-      }
-      .point label {
-        margin-top: 6px;
-      }
-      .ours {
-        background: #fff8e1;
-      }
-      pre.code {
-        background: #f5f5f5;
-        border-radius: 10px;
-        padding: 12px;
-        font-size: 12px;
-        overflow-x: auto;
-        white-space: pre;
-        margin-top: 8px;
-      }
-      .tab {
-        font-size: 13px;
-        padding: 10px 4px;
-      }
-      /* Маркетплейс — рабочий экран: шире, чем касса */
       .container {
-        max-width: 1100px;
+        max-width: 1120px;
       }
-      .search {
-        position: sticky;
-        top: 0;
-        z-index: 5;
-        background: #fff;
-        padding: 4px 0 8px;
-      }
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-        gap: 12px;
-        margin-top: 12px;
-      }
-      .icard {
-        border: 1px solid #eee;
-        border-radius: 14px;
-        padding: 14px;
-        background: #fff;
+      .top {
         display: flex;
-        flex-direction: column;
-        gap: 6px;
-        min-width: 0;
-      }
-      .icard .head {
-        display: flex;
+        align-items: center;
         gap: 10px;
-        align-items: flex-start;
-      }
-      .icard .head img {
-        width: 64px;
-        height: 64px;
-        object-fit: contain;
-        border-radius: 8px;
-        background: #fafafa;
-        flex: none;
-      }
-      .icard .title {
-        font-weight: 600;
-        line-height: 1.3;
-        word-break: break-word;
-      }
-      .icard .sub {
-        font-size: 12px;
-        color: #888;
-      }
-      .icard input,
-      .icard select {
-        padding: 8px 10px;
-        font-size: 15px;
-      }
-      .icard label {
-        margin-top: 4px;
-      }
-      .icard .btn {
-        padding: 10px;
-        font-size: 14px;
-        margin: 0;
-      }
-      .icard .acts {
-        display: flex;
-        gap: 6px;
         flex-wrap: wrap;
-        margin-top: auto;
-        padding-top: 6px;
+        margin: 8px 0 12px;
       }
-      .icard .acts > * {
+      .top h1 {
+        margin: 0;
+        text-align: left;
+        font-size: 22px;
         flex: 1;
       }
-      .icard .point {
-        margin-top: 2px;
-        padding: 6px 10px;
-      }
-      .icard .point .row input {
-        min-width: 0;
-      }
-      .icard .items {
-        font-size: 13px;
-        border-top: 1px dashed #eee;
-        padding-top: 6px;
-      }
-      .chip {
-        display: inline-block;
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
         font-size: 12px;
-        padding: 2px 8px;
+        font-weight: 600;
+        padding: 4px 10px;
         border-radius: 999px;
         background: #f0f0f0;
-        color: #555;
+        color: #666;
       }
-      .chip.ok {
+      .pill::before {
+        content: '';
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #bbb;
+      }
+      .pill.on {
         background: #e8f5e9;
         color: #2e7d32;
       }
-      .chip.no {
+      .pill.on::before {
+        background: #43a047;
+      }
+      .pill.warn {
+        background: #fff3e0;
+        color: #b26a00;
+      }
+      .pill.warn::before {
+        background: #fb8c00;
+      }
+      .mtabs {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 4px;
+        background: #fff;
+        border-radius: 14px;
+        padding: 4px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        margin-bottom: 14px;
+      }
+      .mtab {
+        border: none;
+        background: none;
+        padding: 12px 4px;
+        border-radius: 10px;
+        font-size: 14px;
+        font-weight: 600;
+        color: #777;
+        cursor: pointer;
+      }
+      .mtab.active {
+        background: #e31e24;
+        color: #fff;
+      }
+      .seg {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        padding-bottom: 4px;
+        margin-bottom: 10px;
+      }
+      .seg button {
+        flex: none;
+        border: 1px solid #e5e5e5;
+        background: #fff;
+        border-radius: 10px;
+        padding: 9px 12px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #555;
+        cursor: pointer;
+      }
+      .seg button.active {
+        background: #1a1a1a;
+        border-color: #1a1a1a;
+        color: #fff;
+      }
+      .seg .n {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 0 6px;
+        border-radius: 999px;
+        background: rgba(0, 0, 0, 0.08);
+        font-size: 11px;
+      }
+      .seg button.active .n {
+        background: rgba(255, 255, 255, 0.25);
+      }
+      .bar {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      .bar input[type='search'] {
+        flex: 1;
+        min-width: 200px;
+        padding: 10px 12px;
+        font-size: 14px;
+      }
+      .b {
+        border: none;
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        background: #f0f0f0;
+        color: #333;
+        white-space: nowrap;
+      }
+      .b.red {
+        background: #e31e24;
+        color: #fff;
+      }
+      .b.dark {
+        background: #1a1a1a;
+        color: #fff;
+      }
+      .b:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .b.sm {
+        padding: 7px 10px;
+        font-size: 13px;
+      }
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .kpi {
+        background: #fff;
+        border-radius: 12px;
+        padding: 10px 14px;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+      }
+      .kpi .l {
+        font-size: 11px;
+        text-transform: uppercase;
+        color: #888;
+        font-weight: 700;
+      }
+      .kpi .v {
+        font-size: 20px;
+        font-weight: 800;
+        margin-top: 2px;
+      }
+      .v.minus {
+        color: #c62828;
+      }
+      .v.plus {
+        color: #2e7d32;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+        gap: 10px;
+      }
+      .ic {
+        background: #fff;
+        border-radius: 14px;
+        padding: 14px;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-width: 0;
+      }
+      .ic.sel {
+        outline: 2px solid #e31e24;
+      }
+      .hd {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .hd .code {
+        font-weight: 800;
+        font-size: 16px;
+      }
+      .hd .date {
+        margin-left: auto;
+        font-size: 12px;
+        color: #999;
+      }
+      .sub {
+        font-size: 12px;
+        color: #888;
+      }
+      .item {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      .ph {
+        width: 56px;
+        height: 56px;
+        flex: none;
+        border-radius: 10px;
+        background: #f5f5f5;
+        object-fit: contain;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        color: #ccc;
+      }
+      .ph.big {
+        width: 84px;
+        height: 84px;
+      }
+      .nm {
+        font-weight: 600;
+        font-size: 14px;
+        line-height: 1.3;
+        word-break: break-word;
+      }
+      .money {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+        background: #fafafa;
+        border-radius: 10px;
+        padding: 8px 10px;
+        font-size: 11px;
+        color: #888;
+      }
+      .money b {
+        display: block;
+        font-size: 14px;
+        color: #1a1a1a;
+      }
+      .money .minus b {
+        color: #c62828;
+      }
+      .money .plus b {
+        color: #2e7d32;
+      }
+      .chip {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: 6px;
+        background: #f0f0f0;
+        color: #555;
+      }
+      .chip.g {
+        background: #e8f5e9;
+        color: #2e7d32;
+      }
+      .chip.r {
         background: #fdecea;
         color: #c62828;
       }
-      .bubble {
-        background: #f1f8e9;
-        border-radius: 12px 12px 4px 12px;
-        padding: 8px 10px;
+      .chip.y {
+        background: #fff3e0;
+        color: #b26a00;
+      }
+      .chip.b {
+        background: #e3f2fd;
+        color: #1565c0;
+      }
+      .chip.v {
+        background: #f3e5f5;
+        color: #7b1fa2;
+      }
+      .acts {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .sw {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
         font-size: 13px;
-        align-self: flex-end;
-        max-width: 95%;
+        font-weight: 600;
+        user-select: none;
+        margin: 0;
+        color: #333;
       }
-      .bubble.failed {
+      .sw input {
+        display: none;
+      }
+      .sw i {
+        width: 38px;
+        height: 22px;
+        border-radius: 11px;
+        background: #ccc;
+        position: relative;
+        transition: 0.15s;
+        flex: none;
+      }
+      .sw i::after {
+        content: '';
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #fff;
+        transition: 0.15s;
+      }
+      .sw input:checked + i {
+        background: #e31e24;
+      }
+      .sw.green input:checked + i {
+        background: #2e7d32;
+      }
+      .sw input:checked + i::after {
+        left: 19px;
+      }
+      .ck {
+        width: 20px;
+        height: 20px;
+        flex: none;
+        accent-color: #e31e24;
+        cursor: pointer;
+      }
+      .selbar {
+        position: sticky;
+        top: 58px;
+        z-index: 9;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        align-items: center;
+        background: #fff3f3;
+        border: 1px solid #f5c2c4;
+        border-radius: 12px;
+        padding: 8px;
+        margin-bottom: 10px;
+      }
+      .note {
+        padding: 10px 14px;
+        border-radius: 10px;
+        font-size: 13px;
+        margin-bottom: 10px;
+        background: #fff3e0;
+        color: #8a5300;
+      }
+      .note.err {
         background: #fdecea;
+        color: #c62828;
       }
-      .bubble .meta {
-        font-size: 11px;
-        color: #888;
-        margin-top: 2px;
+      .note.ok {
+        background: #e8f5e9;
+        color: #2e7d32;
       }
-      .settings {
+      .empty {
+        text-align: center;
+        color: #999;
+        font-size: 14px;
+        padding: 30px 10px;
+        border: 1px dashed #ddd;
+        border-radius: 12px;
+      }
+      .cols {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-        gap: 16px;
+        gap: 12px;
+        align-items: start;
       }
-      .settings > .card {
+      .cols .card {
         margin: 0;
+      }
+      .two {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      textarea {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        font: inherit;
+        font-size: 14px;
+      }
+      #tokenState p,
+      #cabinetState p {
+        margin: 12px 0 4px;
+      }
+      .muted {
+        font-size: 12px;
+        color: #888;
+        margin-top: 4px;
+      }
+      .log li {
+        list-style: none;
+        border-bottom: 1px solid #f0f0f0;
+        padding: 8px 0;
+        font-size: 13px;
+      }
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 20px;
+        transform: translateX(-50%);
+        background: #1a1a1a;
+        color: #fff;
+        padding: 10px 16px;
+        border-radius: 10px;
+        font-size: 14px;
+        z-index: 100;
+        max-width: 90vw;
+      }
+      .toast.err {
+        background: #c62828;
+      }
+      dialog {
+        margin: auto;
+        border: none;
+        border-radius: 16px;
+        padding: 0;
+        width: min(560px, 94vw);
+        max-height: 90vh;
+      }
+      dialog::backdrop {
+        background: rgba(0, 0, 0, 0.4);
+      }
+      .dh {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 16px;
+        border-bottom: 1px solid #eee;
+        position: sticky;
+        top: 0;
+        background: #fff;
+        z-index: 1;
+      }
+      .dh b {
+        flex: 1;
+        font-size: 16px;
+      }
+      .db {
+        padding: 14px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .box {
+        border: 1px solid #eee;
+        border-radius: 12px;
+        padding: 12px;
+      }
+      .box h3 {
+        font-size: 14px;
+        margin-bottom: 8px;
+      }
+      .sellers li {
+        list-style: none;
+        display: flex;
+        gap: 8px;
+        padding: 6px 4px;
+        border-bottom: 1px solid #f3f3f3;
+        font-size: 13px;
+      }
+      .sellers li.us {
+        background: #fff3f3;
+        font-weight: 700;
+      }
+      .sellers span:nth-child(2) {
+        flex: 1;
+      }
+      @media (max-width: 520px) {
+        .mtab {
+          font-size: 12px;
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        .money {
+          grid-template-columns: 1fr 1fr;
+        }
       }
     </style>
   </head>
   <body>
     <div class="container">
-      <h1>🛒 Kaspi Маркетплейс</h1>
-      <button class="link-btn" style="margin: 0 0 12px" onclick="location.href = 'index.html'">
-        ← Сменить режим (Kaspi Pay)
-      </button>
-
-      <!-- ═══ ПОДКЛЮЧЕНИЕ ═══ -->
-      <div class="card">
-        <h2>1. Токен API продавца</h2>
-        <p class="muted">Заказы, принятие, накладные. Кабинет продавца → Настройки → Токен API.</p>
-        <div id="tokenForm">
-          <label>Токен API</label>
-          <input type="password" id="tokenInput" autocomplete="off" placeholder="X-Auth-Token" />
-          <label>Номер магазина (merchant UID)</label>
-          <input type="text" id="merchantUidInput" inputmode="numeric" placeholder="например 30322035" />
-          <button class="btn btn-primary" id="btnConnect" onclick="connectToken()">Подключить</button>
-        </div>
-        <div id="tokenState" class="conn hidden">
-          <div><b>Подключён</b> <span class="muted" id="tokenInfo"></span></div>
-          <button class="btn btn-secondary" onclick="disconnectToken()">Отключить</button>
-        </div>
-        <div id="tokenMsg" class="hidden" style="margin-top: 12px"></div>
+      <div class="top">
+        <h1>🛒 Kaspi Маркетплейс</h1>
+        <span class="pill" id="pillToken">Токен</span>
+        <span class="pill" id="pillCabinet">Кабинет</span>
+        <button class="b sm" onclick="location.href = 'index.html'">Kaspi Pay (касса) →</button>
       </div>
 
-      <div class="card">
-        <h2>2. Кабинет продавца</h2>
-        <p class="muted">
-          То, чего нет в API по токену: список товаров с ценами и остатками, изменение цены, наличия и предзаказа.
-        </p>
-        <div id="cabinetForm">
-          <label>Номер телефона</label>
-          <input type="tel" id="mcLogin" inputmode="numeric" autocomplete="tel" placeholder="+7 701 234 56 78" />
-          <p class="muted" style="margin-top: 4px">
-            Как в приложении Kaspi: номер владельца или сотрудника кабинета. Kaspi пришлёт код по SMS.
-          </p>
-          <button class="btn btn-primary" id="btnMcLogin" onclick="cabinetLogin()">Получить код по SMS</button>
+      <nav class="mtabs">
+        <button class="mtab" data-tab="orders" onclick="switchTab('orders')">Заказы</button>
+        <button class="mtab" data-tab="products" onclick="switchTab('products')">Товары</button>
+        <button class="mtab" data-tab="messages" onclick="switchTab('messages')">Рассылка</button>
+        <button class="mtab" data-tab="settings" onclick="switchTab('settings')">Настройки</button>
+      </nav>
 
-          <div id="codeStep" class="hidden" style="margin-top: 12px">
-            <label>Код из SMS</label>
-            <input type="tel" id="mcCode" inputmode="numeric" autocomplete="one-time-code" placeholder="4–6 цифр" />
-            <button class="btn btn-primary" id="btnMcCode" onclick="cabinetConfirmCode()">Подтвердить код</button>
-            <button class="link-btn" onclick="cabinetRestart()">← Изменить номер</button>
-          </div>
-
-          <details id="cookieLogin" style="margin-top: 16px">
-            <summary style="cursor: pointer; font-weight: 600">SMS не приходит? Вход через браузер</summary>
-            <ol class="muted" style="margin: 8px 0 0 18px; line-height: 1.6">
-              <li>На компьютере откройте <b>kaspi.kz/mc</b> в Chrome и войдите как обычно (с SMS-кодом).</li>
-              <li>Нажмите <b>F12</b> → вкладка <b>Network</b> → обновите страницу (F5).</li>
-              <li>Выберите любой запрос к <b>mc.shop.kaspi.kz</b> → <b>Headers</b> → <b>Request Headers</b>.</li>
-              <li>Скопируйте всё значение строки <b>Cookie</b> и вставьте ниже.</li>
-            </ol>
-            <label>Cookie из браузера</label>
-            <textarea
-              id="mcCookies"
-              rows="4"
-              style="width: 100%; font-family: monospace; font-size: 12px"
-              placeholder="mc-session=…; mc-sid=…"
-            ></textarea>
-            <label>Номер магазина (merchant UID)</label>
-            <input type="text" id="mcMerchantUid" inputmode="numeric" placeholder="например 30322035" />
-            <button class="btn btn-secondary" id="btnMcCookies" onclick="cabinetCookieLogin()">
-              Подключить кабинет
-            </button>
-            <p class="muted" style="margin-top: 6px">
-              Cookie дают доступ к кабинету — вставляйте только сюда. Сервер хранит их зашифрованными, у вас в браузере.
-            </p>
-          </details>
+      <!-- ═══ ЗАКАЗЫ ═══ -->
+      <section id="tab-orders" class="hidden">
+        <div id="ordersWarn"></div>
+        <div class="seg" id="orderTabs"></div>
+        <div class="bar">
+          <input type="search" id="orderQ" placeholder="Номер заказа или имя покупателя" oninput="ordersSearch()" />
+          <button class="b" onclick="loadOrders(true)">↻ Обновить</button>
         </div>
-        <div id="cabinetState" class="hidden">
-          <div class="conn">
-            <div><b>Кабинет подключён</b></div>
-            <button class="btn btn-secondary" onclick="cabinetLogout()">Выйти</button>
-          </div>
-          <label>Магазин</label>
-          <select id="merchantSelect" onchange="selectMerchant()"></select>
+        <p class="sub" id="orderHint" style="margin-bottom: 10px"></p>
+        <div class="kpis" id="orderKpis"></div>
+        <div class="grid" id="ordersList"></div>
+      </section>
+
+      <!-- ═══ ТОВАРЫ ═══ -->
+      <section id="tab-products" class="hidden">
+        <div id="productsWarn"></div>
+        <div class="bar">
+          <button class="b red" id="btnSync" onclick="syncProducts()">↻ Обновить из кабинета</button>
+          <button class="b" id="btnCheck" onclick="checkAll()">Проверить места и цены</button>
+          <button class="b" id="btnRun" onclick="runReprice()">⚡ Демпинг сейчас</button>
         </div>
-        <div id="cabinetMsg" class="hidden" style="margin-top: 12px"></div>
-      </div>
-
-      <!-- ═══ РАЗДЕЛЫ ═══ -->
-      <div class="tabs">
-        <button class="tab active" id="tabOrders" onclick="switchTab('orders')">Заказы</button>
-        <button class="tab" id="tabOffers" onclick="switchTab('offers')">Товары</button>
-        <button class="tab" id="tabSms" onclick="switchTab('sms')">Сообщения</button>
-        <button class="tab" id="tabCompetitors" onclick="switchTab('competitors')">Конкуренты</button>
-        <button class="tab" id="tabWms" onclick="switchTab('wms')">NS WMS</button>
-      </div>
-
-      <!-- Заказы -->
-      <div id="ordersTab">
-        <div class="card">
-          <h2>Заказы за 14 дней</h2>
-          <div class="search">
-            <div class="row">
-              <select id="orderState" onchange="loadOrders()">
-                <option value="NEW">Новые</option>
-                <option value="SIGN_REQUIRED">Нужна подпись</option>
-                <option value="KASPI_DELIVERY">Kaspi Доставка</option>
-                <option value="DELIVERY">Своя доставка</option>
-                <option value="PICKUP">Самовывоз</option>
-                <option value="ARCHIVE">Архив</option>
-              </select>
-              <button class="btn btn-secondary" style="margin: 0" onclick="loadOrders()">Обновить</button>
-            </div>
-            <input
-              type="search"
-              id="orderSearch"
-              style="margin-top: 8px"
-              placeholder="Поиск: номер заказа, имя, телефон, адрес"
-              oninput="filterOrders()"
-              onkeydown="if (event.key === 'Enter') findOrder();"
+        <div id="checkProgress" class="note hidden"></div>
+        <div class="seg" id="productFilters"></div>
+        <div class="bar">
+          <label class="sw" style="margin: 0"
+            ><input
+              type="checkbox"
+              class="ck"
+              id="pSelAll"
+              onchange="selectAll('p', this.checked)"
+              style="display: inline"
             />
-            <p class="muted" id="ordersCount" style="margin-top: 4px"></p>
-          </div>
-          <div id="ordersList" class="grid">
-            <p class="muted">Подключите токен — заказы появятся здесь</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- Товары -->
-      <div id="offersTab" class="hidden">
-        <div class="card">
-          <h2>Товары магазина</h2>
-          <div class="search">
-            <input
-              type="search"
-              id="offerQuery"
-              placeholder="Поиск: название или артикул"
-              oninput="offerSearchInput()"
-              onkeydown="if (event.key === 'Enter') loadOffers(0);"
-            />
-            <p class="muted" id="offersCount" style="margin-top: 4px"></p>
-          </div>
-          <div id="offersList" class="grid">
-            <p class="muted">Войдите в кабинет продавца — товары появятся здесь</p>
-          </div>
-          <div class="row" id="offersPager" style="margin-top: 12px"></div>
-        </div>
-      </div>
-
-      <!-- Конкуренты -->
-      <div id="competitorsTab" class="hidden">
-        <div class="card">
-          <h2>Конкуренты на карточке</h2>
-          <p class="muted">
-            Номер карточки — из ссылки kaspi.kz/shop/p/…-<b>123456789</b>/ или из позиции заказа. Витрина Kaspi
-            блокирует облачные серверы — работает, когда сервер запущен с обычного IP.
-          </p>
-          <div class="row" style="margin-top: 8px">
-            <input type="text" id="cardId" placeholder="Номер карточки" inputmode="numeric" />
-            <button class="btn btn-secondary" style="margin: 0" onclick="loadCompetitors()">Проверить</button>
-          </div>
-          <div id="competitorsList" style="margin-top: 12px"></div>
-
-          <div id="repriceBox" class="hidden" style="margin-top: 8px; border-top: 1px solid #eee; padding-top: 12px">
-            <h2 style="font-size: 16px">Демпинг — цена против конкурентов</h2>
-            <p class="muted">
-              Поставим цену на «шаг» ниже самого дешёвого конкурента, но не ниже вашего минимума (пола), чтобы не уйти в
-              убыток. Меняет цену в кабинете, поэтому нужен вход в кабинет.
-            </p>
-            <div class="row">
-              <div style="flex: 1">
-                <label>Артикул (sku)</label>
-                <input type="text" id="repriceSku" />
-              </div>
-              <div style="flex: 1">
-                <label>Мин. цена, ₸ (пол)</label>
-                <input type="number" id="repriceFloor" min="1" inputmode="numeric" />
-              </div>
-            </div>
-            <label>Шаг ниже конкурента, ₸</label>
-            <input type="number" id="repriceStep" min="0" value="1" inputmode="numeric" />
-            <div class="row" style="margin-top: 8px">
-              <button class="btn btn-secondary" style="margin: 0" onclick="reprice(false)">Рассчитать цену</button>
-              <button class="btn btn-primary" style="margin: 0" onclick="reprice(true)">Поставить цену</button>
-            </div>
-            <div id="repriceMsg" class="hidden" style="margin-top: 8px"></div>
-
-            <div style="margin-top: 14px; border-top: 1px dashed #ddd; padding-top: 10px">
-              <label class="row" style="align-items: center; gap: 8px">
-                <input type="checkbox" id="autoRepriceOn" style="width: auto" onchange="autoRepriceToggle()" />
-                <span><b>Авто-демпинг: сам следит и меняет цену</b></span>
-              </label>
-              <p class="muted" id="autoRepriceHint" style="margin-top: 2px">
-                Сервер сам, по расписанию, держит цену ниже конкурентов (но не ниже пола) для товаров из списка.
-              </p>
-              <button class="btn btn-secondary" onclick="autoRepriceAdd()">Добавить этот товар в авто-демпинг</button>
-              <div id="autoRepriceMsg" class="hidden" style="margin-top: 8px"></div>
-              <div id="autoRepriceList" style="margin-top: 8px"></div>
-              <button class="btn btn-secondary" id="btnAutoRun" onclick="autoRepriceRun()" style="margin-top: 8px">
-                Проверить сейчас
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Сообщения покупателю -->
-      <div id="smsTab" class="hidden">
-        <div class="card">
-          <h2>Чаты с покупателями</h2>
-          <p class="muted">
-            Что магазин отправил каждому покупателю — по заказам. Отправка идёт автоматически: «заказ принят» и «заказ
-            выдан».
-          </p>
-          <div id="smsWarn"></div>
-          <div class="search">
-            <input
-              type="search"
-              id="chatSearch"
-              placeholder="Поиск: номер заказа, телефон, текст"
-              oninput="renderChats()"
-            />
-            <p class="muted" id="chatsCount" style="margin-top: 4px"></p>
-          </div>
-          <div id="smsLog" class="grid"></div>
-        </div>
-
-        <div class="settings">
-          <div class="card">
-            <h2>Автоотправка</h2>
-            <label class="row" style="align-items: center; gap: 8px; margin-top: 0">
-              <input type="checkbox" id="smsEnabled" style="width: auto; flex: none" onchange="smsToggle()" />
-              <span><b>Отправлять покупателям автоматически</b></span>
-            </label>
-            <p class="muted" id="smsEnabledHint" style="margin-top: 2px"></p>
-            <div class="row" style="margin-top: 8px">
-              <label style="flex: 1"><input type="checkbox" id="smsNew" style="width: auto" /> Новый заказ</label>
-              <label style="flex: 1"><input type="checkbox" id="smsIssued" style="width: auto" /> Заказ выдан</label>
-            </div>
-            <p class="muted" id="smsPlaceholders" style="margin-top: 8px"></p>
-            <label>Текст «новый заказ»</label>
-            <textarea id="smsTplNew" rows="3" style="width: 100%"></textarea>
-            <label>Текст «заказ выдан»</label>
-            <textarea id="smsTplIssued" rows="3" style="width: 100%"></textarea>
-            <button class="btn btn-primary" id="btnSmsSave" onclick="smsSave()">Сохранить</button>
-            <div id="smsMsg" class="hidden" style="margin-top: 10px"></div>
-          </div>
-
-          <div class="card">
-            <h2>SMS-сервис магазина</h2>
-            <label style="margin-top: 0">Сервис</label>
-            <select id="smsProvider"></select>
-            <div id="smsLoginWrap" class="hidden">
-              <label>Логин SMSC.kz</label>
-              <input type="text" id="smsLogin" autocomplete="off" />
-            </div>
-            <label>API-ключ (пароль) сервиса</label>
-            <input type="password" id="smsKey" autocomplete="off" placeholder="из личного кабинета SMS-сервиса" />
-            <p class="muted" id="smsKeyHint"></p>
-            <div class="row">
-              <div style="flex: 1">
-                <label>Имя отправителя</label>
-                <input type="text" id="smsSender" maxlength="11" placeholder="одобрено в сервисе" />
-              </div>
-              <div style="flex: 1">
-                <label>Магазин в тексте</label>
-                <input type="text" id="smsShop" placeholder="вместо {shop}" />
-              </div>
-            </div>
-            <h2 style="margin-top: 16px; font-size: 16px">Проверка</h2>
-            <label>Ваш номер для пробного сообщения</label>
-            <input type="tel" id="smsTestPhone" inputmode="numeric" placeholder="+7 701 234 56 78" />
-            <div class="row" style="margin-top: 8px">
-              <button class="btn btn-secondary" style="margin: 0" onclick="smsTest('new')">Пробное «принят»</button>
-              <button class="btn btn-secondary" style="margin: 0" onclick="smsTest('issued')">Пробное «выдан»</button>
-            </div>
-            <button class="btn btn-secondary" onclick="smsRun()">Проверить заказы сейчас</button>
-          </div>
-
-          <div class="card">
-            <h2>Чат Kaspi вместо SMS</h2>
-            <p class="muted">
-              Сообщения можно слать прямо в чат Kaspi, как сотрудник в кабинете — бесплатно. Kaspi не описывает этот
-              чат, поэтому сначала находим его адрес по вашей сессии кабинета. Кнопка ничего покупателям не отправляет —
-              только читает код кабинета.
-            </p>
-            <button class="btn btn-secondary" id="btnDiscoverChat" onclick="discoverChat()">Найти чат Kaspi</button>
-            <p class="muted" style="margin-top: 6px">Результат скопируйте и пришлите разработчику:</p>
-            <textarea
-              id="discoverOut"
-              rows="6"
-              style="width: 100%; font-family: monospace; font-size: 11px"
-              readonly
-            ></textarea>
-          </div>
-        </div>
-      </div>
-
-      <!-- NS WMS -->
-      <div id="wmsTab" class="hidden">
-        <div class="card">
-          <h2>Подключение к NS WMS</h2>
-          <p class="muted">
-            NS WMS ходит в этот сервер так же, как за Kaspi QR. Адрес сервера — в переменной
-            <code>KASPI_BRIDGE_URL</code> на стороне WMS.
-          </p>
-          <label>Адрес сервера</label>
-          <pre class="code" id="wmsBase"></pre>
-          <label>Что доступно сейчас</label>
-          <div id="wmsCaps"></div>
-          <label>Вызовы</label>
-          <pre class="code">
-POST /api/market/connect          {token, merchantUid} → marketToken
-POST /api/market/cabinet/login    {email, password}    → mcSession, merchants
-GET  /api/market/capabilities
-
-GET  /api/market/orders?state=NEW&amp;days=14
-GET  /api/market/orders/by-code/{code}
-GET  /api/market/orders/{id}
-POST /api/market/orders/{id}/accept
-POST /api/market/orders/{id}/assemble   {numberOfSpace}
-GET  /api/market/orders/{id}/waybill    → PDF
-
-GET  /api/market/offers?q=&amp;page=0&amp;limit=50
-POST /api/market/offers/update     {sku, price?, points?[{storeId, available, stockCount, preorder}]}
-GET  /api/market/cards/{cardId}/competitors
-
-Заголовки:
-  X-Kaspi-Token + X-Merchant-Uid   — токен API как есть (или X-Market-Token из /connect)
-  X-Mc-Session                      — сессия кабинета; сервер присылает обновлённую
-                                      в ответном заголовке X-Mc-Session — сохраняйте её</pre
+            Выбрать все</label
           >
-          <p class="muted" style="margin-top: 8px">Подробно — docs/MARKETPLACE.md в репозитории.</p>
+          <input
+            type="search"
+            id="productQ"
+            placeholder="Название, артикул или номер карточки"
+            oninput="productsSearch()"
+          />
         </div>
-      </div>
+        <div id="pSelBar" class="selbar hidden">
+          <b id="pSelCount"></b>
+          <button class="b sm" onclick="bulkCards('p', { repriceEnabled: true }, 'Демпинг включён')">
+            Демпинг вкл
+          </button>
+          <button class="b sm" onclick="bulkCards('p', { repriceEnabled: false }, 'Демпинг выключен')">
+            Демпинг выкл
+          </button>
+          <button class="b sm" onclick="openBulkReprice()">Шаг и минимум…</button>
+          <button class="b sm" onclick="selectAll('p', false)">✕</button>
+        </div>
+        <div class="grid" id="productsList"></div>
+      </section>
+
+      <!-- ═══ РАССЫЛКА ═══ -->
+      <section id="tab-messages" class="hidden">
+        <div id="messagesWarn"></div>
+        <div class="card">
+          <label class="sw" style="font-size: 15px"
+            ><input type="checkbox" id="mEnabled" onchange="saveMessages({ enabled: this.checked })" /><i></i> Писать
+            покупателям автоматически</label
+          >
+          <p class="muted" id="mEnabledHint"></p>
+          <label>Куда писать</label>
+          <div class="seg" id="mChannel"></div>
+          <div class="two">
+            <label class="sw"><input type="checkbox" id="mNew" /><i></i> Заказ принят</label>
+            <label class="sw"><input type="checkbox" id="mIssued" /><i></i> Заказ выдан</label>
+          </div>
+          <label>Название магазина (вместо {shop})</label>
+          <input type="text" id="mShop" />
+          <label>Общий текст «Заказ принят»</label>
+          <textarea id="mTplNew" rows="3"></textarea>
+          <label>Общий текст «Заказ выдан»</label>
+          <textarea id="mTplIssued" rows="3"></textarea>
+          <p class="muted" id="mPlaceholders"></p>
+          <div class="acts" style="margin-top: 10px">
+            <button class="b red" onclick="saveMessages()">Сохранить</button>
+            <button class="b" onclick="runMessages()">Проверить заказы сейчас</button>
+          </div>
+        </div>
+
+        <h2 style="font-size: 16px; margin: 6px 0 10px">Рассылка по карточкам</h2>
+        <div class="seg" id="msgFilters"></div>
+        <div class="bar">
+          <label class="sw" style="margin: 0"
+            ><input
+              type="checkbox"
+              class="ck"
+              id="mSelAll"
+              onchange="selectAll('m', this.checked)"
+              style="display: inline"
+            />
+            Выбрать все</label
+          >
+          <input type="search" id="msgQ" placeholder="Название или артикул" oninput="renderMsgCards()" />
+        </div>
+        <div id="mSelBar" class="selbar hidden">
+          <b id="mSelCount"></b>
+          <button class="b sm" onclick="bulkCards('m', { msgEnabled: true }, 'Рассылка включена')">Включить</button>
+          <button class="b sm" onclick="bulkCards('m', { msgEnabled: false }, 'Рассылка выключена')">Выключить</button>
+          <button class="b sm" onclick="openTextEditor()">Свой текст…</button>
+          <button class="b sm" onclick="bulkCards('m', { msgNew: '', msgIssued: '' }, 'Вернули общий текст')">
+            Общий текст
+          </button>
+          <button class="b sm" onclick="selectAll('m', false)">✕</button>
+        </div>
+        <div class="grid" id="msgCards"></div>
+
+        <div class="cols" style="margin-top: 14px">
+          <div class="card">
+            <h2>Проверка чата Kaspi</h2>
+            <p class="muted">Найдёт чат по номеру реального заказа, ничего не отправляя.</p>
+            <div class="bar" style="margin-top: 8px">
+              <input type="search" id="probeCode" placeholder="Номер заказа" />
+              <button class="b" onclick="probeChat()">Проверить</button>
+            </div>
+            <div id="probeOut"></div>
+          </div>
+          <div class="card">
+            <h2>Журнал сообщений</h2>
+            <ul class="log" id="msgLog"></ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══ НАСТРОЙКИ ═══ -->
+      <section id="tab-settings" class="hidden">
+        <div class="cols">
+          <div class="card">
+            <h2>Токен API продавца</h2>
+            <p class="muted">Заказы, принятие, накладные. Кабинет продавца → Настройки → Токен API.</p>
+            <div id="tokenForm">
+              <label>Токен API</label>
+              <input type="password" id="tokenInput" autocomplete="off" />
+              <label>Номер магазина (merchant UID)</label>
+              <input type="text" id="merchantUidInput" inputmode="numeric" placeholder="например 30322035" />
+              <button class="b red" style="margin-top: 10px" onclick="connectToken()">Подключить</button>
+            </div>
+            <div id="tokenState" class="hidden">
+              <p><b>Подключён</b> <span class="sub" id="tokenInfo"></span></p>
+              <button class="b" style="margin-top: 8px" onclick="disconnectToken()">Отключить</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Кабинет продавца</h2>
+            <p class="muted">
+              Товары, цены, наличие, демпинг и чат — только через кабинет. Номер телефона и код из SMS.
+            </p>
+            <div id="cabinetForm">
+              <label>Номер телефона</label>
+              <input type="tel" id="mcPhone" inputmode="numeric" placeholder="+7 701 234 56 78" />
+              <button class="b red" style="margin-top: 10px" id="btnPhone" onclick="cabinetLogin()">
+                Получить код по SMS
+              </button>
+              <div id="codeStep" class="hidden">
+                <label>Код из SMS</label>
+                <input type="tel" id="mcCode" inputmode="numeric" autocomplete="one-time-code" />
+                <div class="acts" style="margin-top: 10px">
+                  <button class="b red" onclick="cabinetConfirm()">Войти</button>
+                  <button class="b" onclick="cabinetRestart()">Другой номер</button>
+                </div>
+              </div>
+              <details style="margin-top: 12px">
+                <summary style="cursor: pointer; font-weight: 600; font-size: 14px">
+                  Код не приходит? Вход через браузер
+                </summary>
+                <p class="muted">
+                  Войдите в kaspi.kz/mc в Chrome → F12 → Network → запрос к mc.shop.kaspi.kz → Request Headers →
+                  скопируйте строку Cookie целиком.
+                </p>
+                <textarea
+                  id="mcCookies"
+                  rows="3"
+                  style="font-family: monospace; font-size: 12px; margin-top: 6px"
+                ></textarea>
+                <label>Номер магазина (merchant UID)</label>
+                <input type="text" id="mcMerchant" inputmode="numeric" />
+                <button class="b" style="margin-top: 8px" onclick="cabinetCookies()">Подключить</button>
+              </details>
+            </div>
+            <div id="cabinetState" class="hidden">
+              <p><b>Кабинет подключён</b></p>
+              <label>Магазин</label>
+              <select id="merchantSelect" onchange="selectMerchant()"></select>
+              <button class="b" style="margin-top: 10px" onclick="cabinetLogout()">Выйти</button>
+            </div>
+            <div id="cabinetMsg"></div>
+          </div>
+
+          <div class="card">
+            <h2>Демпинг</h2>
+            <p class="muted">
+              Цена держится на шаг ниже самого дешёвого конкурента и никогда не ниже минимальной. Какие товары — тумблер
+              на карточке; у карточки можно свой шаг и минимум.
+            </p>
+            <label class="sw" style="margin-top: 10px"
+              ><input
+                type="checkbox"
+                id="sRepriceEnabled"
+                onchange="saveShop({ repriceEnabled: this.checked })"
+              /><i></i> Авто-демпинг работает</label
+            >
+            <p class="muted" id="sLastRun"></p>
+            <div class="two">
+              <div><label>Шаг, ₸</label><input type="number" id="sStep" min="0" /></div>
+              <div>
+                <label>Проверять каждые</label>
+                <select id="sInterval">
+                  <option value="5">5 мин</option>
+                  <option value="10">10 мин</option>
+                  <option value="15">15 мин</option>
+                  <option value="30">30 мин</option>
+                  <option value="60">60 мин</option>
+                </select>
+              </div>
+            </div>
+            <label>Минимальная цена по умолчанию</label>
+            <select id="sFloorMode" onchange="floorModeUi()">
+              <option value="percent">% от цены при включении</option>
+              <option value="fixed">Фиксированная сумма</option>
+            </select>
+            <div id="sFloorPercentWrap">
+              <label>Не ниже, % от цены</label><input type="number" id="sFloorPercent" min="1" max="100" />
+            </div>
+            <div id="sFloorFixedWrap" class="hidden">
+              <label>Не ниже, ₸</label><input type="number" id="sFloorFixed" min="1" />
+            </div>
+            <label class="sw" style="margin-top: 12px"
+              ><input type="checkbox" id="sOnlyStock" /><i></i> Только товары в наличии</label
+            >
+            <button class="b red" style="margin-top: 12px" onclick="saveShopForm()">Сохранить демпинг</button>
+          </div>
+
+          <div class="card">
+            <h2>Удержание Kaspi</h2>
+            <p class="muted">Для «к получению» в заказах. Если Kaspi прислал доставку в заказе — берётся точная.</p>
+            <div class="two">
+              <div><label>Комиссия, % (с НДС)</label><input type="number" step="0.1" id="fPct" /></div>
+              <div><label>Доставка, ₸</label><input type="number" id="fDelivery" /></div>
+              <div><label>Доставка дешёвых, ₸</label><input type="number" id="fLow" /></div>
+              <div><label>Порог суммы, ₸</label><input type="number" id="fThreshold" /></div>
+            </div>
+            <button class="b red" style="margin-top: 12px" onclick="saveFees()">Сохранить</button>
+          </div>
+
+          <div class="card">
+            <h2>SMS-сервис</h2>
+            <p class="muted">Нужен, если рассылка идёт SMS или «чат, а если не вышло — SMS».</p>
+            <label>Сервис</label>
+            <select
+              id="smsProvider"
+              onchange="$('smsLoginWrap').classList.toggle('hidden', this.value !== 'smsc')"
+            ></select>
+            <div id="smsLoginWrap" class="hidden"><label>Логин SMSC.kz</label><input type="text" id="smsLogin" /></div>
+            <label>API-ключ / пароль</label>
+            <input type="password" id="smsKey" autocomplete="off" />
+            <p class="muted" id="smsKeyHint"></p>
+            <label>Имя отправителя</label>
+            <input type="text" id="smsSender" maxlength="11" />
+            <button class="b red" style="margin-top: 12px" onclick="saveSmsService()">Сохранить</button>
+            <label>Пробное SMS на свой номер</label>
+            <div class="bar">
+              <input type="search" id="smsTestPhone" placeholder="+7 701 234 56 78" />
+              <button class="b" onclick="smsTest()">Отправить</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Журнал цен и наличия</h2>
+            <ul class="log" id="priceLog"></ul>
+          </div>
+        </div>
+      </section>
     </div>
+
+    <!-- Карточка товара -->
+    <dialog id="dlgCard">
+      <div class="dh"><b id="dcTitle"></b><button class="b sm" onclick="closeCard()">✕</button></div>
+      <div class="db" id="dcBody"></div>
+    </dialog>
+
+    <!-- Универсальное окно: собран / сообщение / текст / шаг и минимум -->
+    <dialog id="dlg">
+      <div class="dh"><b id="dlgTitle"></b><button class="b sm" onclick="$('dlg').close()">✕</button></div>
+      <div class="db" id="dlgBody"></div>
+    </dialog>
 
     <script src="market.js"></script>
   </body>

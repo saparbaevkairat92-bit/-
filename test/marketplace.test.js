@@ -9,6 +9,7 @@ import {
   normalizeOffer,
   buildOfferUpdate,
   normalizeCardOffer,
+  parseCardId,
 } from '../src/marketplace/normalize.js';
 
 describe('cookies', () => {
@@ -150,5 +151,80 @@ describe('normalizeCardOffer', () => {
     assert.equal(o.position, 2);
     assert.equal(o.merchantId, '30178171');
     assert.equal(o.price, 99000);
+  });
+});
+
+describe('orderTab — вкладки как в кабинете Kaspi', () => {
+  const tab = (a) => normalizeOrder({ id: '1', attributes: a }).tab;
+  it('packing: new, sign required, Kaspi delivery without waybill', () => {
+    assert.equal(tab({ state: 'NEW', status: 'APPROVED_BY_BANK' }), 'packing');
+    assert.equal(tab({ state: 'SIGN_REQUIRED', status: 'ACCEPTED_BY_MERCHANT' }), 'packing');
+    assert.equal(tab({ state: 'KASPI_DELIVERY', status: 'ACCEPTED_BY_MERCHANT', kaspiDelivery: {} }), 'packing');
+  });
+  it('transfer: waybill ready / assembled, and pickup', () => {
+    assert.equal(
+      tab({ state: 'KASPI_DELIVERY', status: 'ACCEPTED_BY_MERCHANT', kaspiDelivery: { waybill: 'x' } }),
+      'transfer',
+    );
+    assert.equal(tab({ state: 'KASPI_DELIVERY', status: 'ACCEPTED_BY_MERCHANT', assembled: true }), 'transfer');
+    assert.equal(tab({ state: 'PICKUP', status: 'ACCEPTED_BY_MERCHANT' }), 'transfer');
+  });
+  it('delivery: courier took it; archive: finished', () => {
+    assert.equal(
+      tab({
+        state: 'KASPI_DELIVERY',
+        status: 'ACCEPTED_BY_MERCHANT',
+        kaspiDelivery: { waybill: 'x', courierTransmissionDate: 1 },
+      }),
+      'delivery',
+    );
+    assert.equal(tab({ state: 'ARCHIVE', status: 'COMPLETED' }), 'archive');
+    assert.equal(tab({ state: 'KASPI_DELIVERY', status: 'CANCELLED' }), 'archive');
+  });
+  it('keeps the exact delivery cost for the seller', () => {
+    const o = normalizeOrder({ id: '1', attributes: { state: 'NEW', deliveryCostForSeller: 926.35 } });
+    assert.equal(o.deliveryCostForSeller, 926.35);
+  });
+});
+
+describe('normalizeOffer — карточка и фото', () => {
+  it('takes the card id from masterSku or the card link', () => {
+    assert.equal(normalizeOffer({ sku: 'A', masterSku: '123456789' }).cardId, '123456789');
+    assert.equal(
+      normalizeOffer({ sku: 'A', shopLink: 'https://kaspi.kz/shop/p/telefon-987654321/' }).cardId,
+      '987654321',
+    );
+    assert.equal(normalizeOffer({ sku: 'A' }).cardId, null);
+  });
+  it('builds a full image URL', () => {
+    assert.equal(normalizeOffer({ images: ['https://x/y.jpg'] }).image, 'https://x/y.jpg');
+    assert.equal(normalizeOffer({ images: [{ large: '//cdn/a.jpg' }] }).image, 'https://cdn/a.jpg');
+    assert.match(
+      normalizeOffer({ images: ['h1/h2/p.jpg'] }).image,
+      /^https:\/\/resources\.cdn-kaspi\.kz\/.*h1\/h2\/p\.jpg$/,
+    );
+  });
+});
+
+describe('фото и номер карточки — любые поля кабинета', () => {
+  it('находит фото в неизвестном поле и в относительном пути CDN', () => {
+    assert.equal(
+      normalizeOffer({ media: { gallery: [{ url: 'https://resources.cdn-kaspi.kz/img/m/p/h1/h2/1.jpg' }] } }).image,
+      'https://resources.cdn-kaspi.kz/img/m/p/h1/h2/1.jpg',
+    );
+    assert.equal(
+      normalizeOffer({ primaryImage: { large: 'h32/h70/84.jpg' } }).image,
+      'https://resources.cdn-kaspi.kz/img/m/p/h32/h70/84.jpg',
+    );
+    assert.equal(normalizeOffer({ title: 'без фото' }).image, null);
+  });
+  it('номер карточки из ссылки где угодно и из вставленного текста', () => {
+    assert.equal(
+      normalizeOffer({ links: { card: 'https://kaspi.kz/shop/p/naushniki-113677582/' } }).cardId,
+      '113677582',
+    );
+    assert.equal(parseCardId('https://kaspi.kz/shop/p/apple-airpods-113677582/?c=750000000'), '113677582');
+    assert.equal(parseCardId('113677582'), '113677582');
+    assert.equal(parseCardId('abc'), null);
   });
 });

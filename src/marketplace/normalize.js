@@ -38,7 +38,38 @@ export const normalizeOrder = (item) => {
     waybill: delivery.waybill || null,
     waybillNumber: delivery.waybillNumber || null,
     courierTransmissionPlanningDate: delivery.courierTransmissionPlanningDate ?? null,
+    courierTransmissionDate: delivery.courierTransmissionDate ?? null,
+    assembled: !!a.assembled,
+    signatureRequired: !!a.signatureRequired,
+    // Доставка, которую Kaspi удержит с продавца (точная, из заказа)
+    deliveryCostForSeller: a.deliveryCostForSeller ?? null,
+    tab: orderTab(a),
   };
+};
+
+// ─── Вкладки заказов как в кабинете Kaspi ───
+// Упаковка → Передача → Передано на доставку → Архив. API отдаёт только state и
+// status, поэтому вкладку выводим из них и из полей kaspiDelivery:
+//  - NEW / SIGN_REQUIRED — ещё не приняты (или ждут подписи) → «Упаковка»;
+//  - KASPI_DELIVERY без накладной → «Упаковка»; накладная есть, курьер ещё не
+//    забрал → «Передача»; курьер забрал (courierTransmissionDate) → «Передано»;
+//  - PICKUP / DELIVERY (самовывоз, своя доставка) — заказ собран и ждёт
+//    покупателя/курьера магазина → «Передача»;
+//  - ARCHIVE → «Архив».
+export const ORDER_TABS = ['packing', 'transfer', 'delivery', 'archive'];
+
+export const orderTab = (a = {}) => {
+  const state = a.state || '';
+  const delivery = a.kaspiDelivery || {};
+  if (state === 'ARCHIVE' || ['COMPLETED', 'CANCELLED', 'RETURNED'].includes(a.status)) return 'archive';
+  if (state === 'NEW' || state === 'SIGN_REQUIRED' || a.status === 'APPROVED_BY_BANK') return 'packing';
+  if (state === 'KASPI_DELIVERY') {
+    if (delivery.courierTransmissionDate) return 'delivery';
+    if (a.assembled || delivery.waybill) return 'transfer';
+    return 'packing';
+  }
+  if (state === 'PICKUP' || state === 'DELIVERY') return 'transfer';
+  return 'packing';
 };
 
 // Позиция заказа (entries) → плоский объект
@@ -78,6 +109,8 @@ export const normalizeOffer = (o) => {
   const stock = avail.reduce((sum, a) => sum + (Number(a.stockCount) || 0), 0);
   return {
     sku: o?.sku ?? o?.merchantSku ?? null,
+    // Номер карточки на витрине — по нему смотрим конкурентов
+    cardId: offerCardId(o),
     masterSku: o?.masterSku ?? o?.productCode ?? null,
     name: o?.title ?? o?.name ?? o?.model ?? null,
     price: o?.price ?? o?.minPrice ?? o?.priceMin ?? null,
@@ -93,9 +126,88 @@ export const normalizeOffer = (o) => {
     })),
     brand: o?.brand ?? null,
     category: o?.category ?? o?.categoryName ?? null,
-    image: o?.images?.[0] ?? o?.image ?? null,
-    cardUrl: o?.shopLink ?? o?.productUrl ?? null,
+    image: offerImage(o),
+    cardUrl: o?.shopLink ?? o?.productUrl ?? (offerCardId(o) ? `https://kaspi.kz/shop/p/-${offerCardId(o)}/` : null),
   };
+};
+
+// Фото товара. Кабинет не документирован и менял имена полей, поэтому сначала
+// известные поля, потом — поиск по всему объекту: любое поле с «image/img/
+// photo/picture» в имени или строка, похожая на картинку CDN Kaspi.
+export const KASPI_IMG_CDN = 'https://resources.cdn-kaspi.kz/img/m/p/';
+const IMG_KEY = /(image|img|photo|picture|preview|thumb)/i;
+const IMG_VAL = /(cdn-kaspi|\.(jpe?g|png|webp)(\?|$))/i;
+
+const imageUrl = (v) => {
+  if (!v) return null;
+  if (typeof v === 'object') {
+    v = v.large ?? v.medium ?? v.url ?? v.small ?? v.link ?? v.src ?? v.path ?? null;
+    if (!v || typeof v === 'object') return null;
+  }
+  const s = String(v).trim();
+  if (!s) return null;
+  if (/^https?:\/\//.test(s)) return s;
+  if (s.startsWith('//')) return `https:${s}`;
+  if (/^\/?img\//.test(s)) return `https://resources.cdn-kaspi.kz/${s.replace(/^\/+/, '')}`;
+  // Относительный путь CDN: h32/h70/84378448199710.jpg
+  if (/^\/?[\w-]+\/[\w-]+\/[\w.-]+\.(jpe?g|png|webp)/i.test(s)) return KASPI_IMG_CDN + s.replace(/^\/+/, '');
+  return null;
+};
+
+const findImage = (node, depth = 0) => {
+  if (!node || depth > 4) return null;
+  if (Array.isArray(node)) {
+    for (const x of node) {
+      const r = typeof x === 'string' ? (IMG_VAL.test(x) ? imageUrl(x) : null) : findImage(x, depth + 1);
+      if (r) return r;
+    }
+    return null;
+  }
+  if (typeof node !== 'object') return null;
+  for (const [k, v] of Object.entries(node)) {
+    if (IMG_KEY.test(k)) {
+      const r = Array.isArray(v) ? findImage(v, depth + 1) || imageUrl(v[0]) : imageUrl(v);
+      if (r) return r;
+    }
+  }
+  for (const v of Object.values(node)) {
+    if (typeof v === 'string' && IMG_VAL.test(v)) {
+      const r = imageUrl(v);
+      if (r) return r;
+    } else if (v && typeof v === 'object') {
+      const r = findImage(v, depth + 1);
+      if (r) return r;
+    }
+  }
+  return null;
+};
+
+export const offerImage = (o) =>
+  imageUrl(o?.images?.[0]) ?? imageUrl(o?.image) ?? imageUrl(o?.imageUrl) ?? imageUrl(o?.primaryImage) ?? findImage(o);
+
+// Номер карточки витрины у товара кабинета: известные поля, затем цифры в
+// конце ссылки на карточку (…/shop/p/название-123456789/) где угодно в объекте
+const CARD_KEYS = ['masterSku', 'productCode', 'productId', 'masterProductId', 'kaspiProductCode', 'cardId'];
+const CARD_LINK = /\/shop\/p\/[^"'\s]*-(\d{5,})\/?/;
+
+export const offerCardId = (o) => {
+  for (const k of CARD_KEYS) {
+    const v = o?.[k];
+    if (v !== undefined && v !== null && /^\d{5,}$/.test(String(v))) return String(v);
+  }
+  const link = String(o?.shopLink ?? o?.productUrl ?? '');
+  const m = link.match(/-(\d{5,})\/?(?:[?#].*)?$/);
+  if (m) return m[1];
+  const any = o ? JSON.stringify(o).match(CARD_LINK) : null;
+  return any ? any[1] : null;
+};
+
+// Номер карточки из того, что вставил человек: число или ссылка на товар Kaspi
+export const parseCardId = (input) => {
+  const s = String(input || '').trim();
+  if (/^\d{5,}$/.test(s)) return s;
+  const m = s.match(/-(\d{5,})\/?(?:[?#].*)?$/) || s.match(/\/p\/(\d{5,})/);
+  return m ? m[1] : null;
 };
 
 // Тело для изменения цены / наличия одного товара в кабинете.

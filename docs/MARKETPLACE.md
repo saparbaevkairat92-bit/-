@@ -72,6 +72,10 @@ GET  /api/market/orders/{id}/waybill        → PDF
 ```
 
 `state`: `NEW`, `SIGN_REQUIRED`, `PICKUP`, `DELIVERY`, `KASPI_DELIVERY`, `ARCHIVE`.
+
+У каждого заказа есть `tab` — вкладка как в кабинете Kaspi: `packing` (упаковка),
+`transfer` (передача), `delivery` (передано на доставку), `archive` (архив), и
+`deliveryCostForSeller` — точная доставка, которую Kaspi удержит с продавца.
 В позиции заказа есть `cardId` — номер карточки на витрине (не путать с артикулом
 продавца `sku`, числа похожи, но разные).
 
@@ -92,24 +96,45 @@ POST /api/market/offers/update
 Отправляются только переданные поля: пустая цена не обнуляет цену на Kaspi. Цена
 должна быть > 0, остаток — целое ≥ 0, предзаказ — 0..30 дней.
 
-### Демпинг — цена против конкурентов (кабинет + витрина)
+### Магазин — рабочие экраны (`/api/market/shop/*`)
 
-Держит цену на «шаг» ниже самого дешёвого конкурента, но не ниже «пола»
-(минимальной цены продавца). Ручной расчёт/применение и авто-режим в фоне.
+Интерфейс `market.html` — четыре вкладки: **Заказы**, **Товары**, **Рассылка**,
+**Настройки**. Карточки товаров и их настройки сервер хранит у себя
+(`market-shop.json`), потому что по ним работает фон — авто-демпинг и
+авто-сообщения. Сессию кабинета сервер берёт из каждого запроса с `X-Mc-Session`.
 
 ```
-POST /api/market/reprice  {cardId, sku, floor, step, apply}   → рекомендация (+ применение)
-GET  /api/market/reprice/auto                                 → состояние авто-демпинга
-PUT  /api/market/reprice/auto  {enabled}                      → вкл/выкл (нужна сессия кабинета)
-POST /api/market/reprice/auto/product {cardId, sku, floor, step}
-DELETE /api/market/reprice/auto/product {cardId, sku}
-POST /api/market/reprice/auto/run                             → разовый проход
+GET  /shop/state                     → настройки, кабинет подключён?, последний проход
+PUT  /shop/settings  {repriceEnabled, repriceStep, floorMode, floorPercent, floorFixed,
+                      intervalMin, onlyInStock, commissionPct, delivery, deliveryLow, deliveryThreshold}
+POST /shop/sync                      → товары из кабинета (в продаже и снятые) — фото, цена, наличие
+GET  /shop/cards?filter=&q=          filter: all | in_stock | out_of_stock | reprice | not_first |
+                                             msg_on | msg_off | msg_custom
+POST /shop/cards/competitors {sku}   → место, продавцы, самая низкая цена (витрина)
+PUT  /shop/cards/settings {skus[], repriceEnabled, repriceStep, repriceFloor, clearStep, clearFloor,
+                           msgEnabled, msgNew, msgIssued}      — одна или много карточек сразу
+POST /shop/cards/update  {sku, price?, available?, stock?}      — прямо в кабинете
+POST /shop/cards/reprice {sku, apply}                           — рассчитать / поставить цену
+POST /shop/reprice/run                                          — проход по всем карточкам
+POST /shop/cabinet/logout                                       — фон перестаёт действовать от имени магазина
+GET  /shop/log?kind=reprice|price|stock
+GET  /shop/orders?tab=packing|transfer|delivery|archive&q=&refresh=1   (токен)
 ```
 
-Пол обязателен (ниже него цена не опускается). Авто-режим хранит сессию кабинета
-у сервера (`market-reprice.json`) и меняет цену в фоне (`REPRICE_INTERVAL_SEC`,
-по умолчанию 600 с). Сессия кабинета истекает — фон ставит `needLogin`, ждём
-повторного входа. Конкуренты берутся с витрины, а она блокирует облачные IP.
+**Демпинг.** Цена держится на шаг ниже самого дешёвого конкурента и никогда не
+ниже минимальной. У карточки свой шаг и минимум; пусто — из общих настроек
+(минимум — % от цены на момент включения или фиксированная сумма). Фон
+проверяет раз в `intervalMin` минут; «только в наличии» — не трогает то, чего нет.
+
+**Заказы.** Вкладки как в кабинете, у заказа фото товаров (из карточек),
+удержание Kaspi: комиссия % + доставка (точная `deliveryCostForSeller` из заказа,
+иначе тариф из настроек) и «к получению».
+
+**Рассылка по карточкам.** У карточки свой тумблер и свои тексты «принят» /
+«выдан». Все товары заказа выключены — сообщение не уходит; иначе берётся свой
+текст первой включённой карточки или общий.
+
+Разовый расчёт без хранения остался: `POST /api/market/reprice {cardId, sku, floor, step, apply}`.
 
 ### Сообщения покупателю — авто-SMS (токен)
 
@@ -129,6 +154,38 @@ POST /api/market/sms/run                     → разовый проход (т
 Одно SMS на событие (защита от дублей — журнал по «код заказа + событие»), только
 по заказам после включения, ключ сервиса наружу не отдаётся. Тексты: `{name}`,
 `{order}`, `{shop}`, `{sum}`.
+
+### Чат Kaspi — сообщение покупателю от имени магазина (кабинет)
+
+Чат — функция кабинета (виджет `webchat-widget`), через токен её нет. Сервер
+находит чат заказа и пишет в него, с cookie кабинета (`X-Mc-Session`, в ответе —
+продлённая сессия):
+
+```
+POST /api/market/chat/send   {orderCode, text}   → {sent, chatId, trace[]}
+POST /api/market/chat/probe  {orderCode}         → {found, chatId, trace[]}   (только поиск, без отправки)
+```
+
+API чата Kaspi не документирован. Адреса найдены разбором виджета
+(`/cabinet/discover-chat`): `mc.shop.kaspi.kz/chats/api/mobile` +
+`/api/v1/chat/search` и `/api/v1/messages/sendMessage`. Тела запросов — шаблоны
+JSON, их можно поправить в `.env` без правки кода:
+
+| Переменная               | По умолчанию                                                  |
+| ------------------------ | ------------------------------------------------------------- |
+| `KASPI_CHAT_API_URL`     | `https://mc.shop.kaspi.kz/chats/api/mobile`                   |
+| `KASPI_CHAT_SEARCH_PATH` | `/api/v1/chat/search`                                         |
+| `KASPI_CHAT_SEARCH_BODY` | `{"searchText":"{order}"}`                                    |
+| `KASPI_CHAT_SEND_PATH`   | `/api/v1/messages/sendMessage`                                |
+| `KASPI_CHAT_SEND_BODY`   | `{"groupId":"{chatId}","text":"{text}","messageType":"TEXT"}` |
+| `KASPI_CHAT_CREATE_PATH` | пусто (создание чата выключено)                               |
+
+Подстановки: `{order}`, `{text}`, `{chatId}`, `{phone}`, `{merchantUid}`. Перед
+первой рассылкой проверьте `/chat/probe` на реальном заказе: в `trace` видно, что
+ответил Kaspi на каждом шаге.
+
+Авто-сообщения (`/api/market/sms`) умеют канал `channel`: `chat` — в чат Kaspi,
+`sms` — SMS-сервисом, `chat_sms` — в чат, а если не вышло — SMS.
 
 ### Конкуренты (витрина)
 

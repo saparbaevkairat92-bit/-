@@ -24,7 +24,7 @@ export const CABINET_URL = process.env.KASPI_MC_URL || 'https://mc.shop.kaspi.kz
 export const CABINET_OAUTH_URL = process.env.KASPI_MC_OAUTH_URL || `${CABINET_URL}/oauth2/authorization/1`;
 export const CABINET_HOME_URL = process.env.KASPI_MC_HOME_URL || 'https://kaspi.kz/mc/';
 
-export const PUBLIC_OFFERS_URL = 'https://kaspi.kz/yml/offer-view/offers';
+export const PUBLIC_OFFERS_URL = process.env.KASPI_PUBLIC_OFFERS_URL || 'https://kaspi.kz/yml/offer-view/offers';
 
 // Город по умолчанию для витрины и цен — Алматы
 export const DEFAULT_CITY_ID = process.env.KASPI_CITY_ID || '750000000';

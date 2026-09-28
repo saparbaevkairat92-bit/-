@@ -16,7 +16,13 @@ import { defaultConfig } from './customerSms.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FILE = path.join(__dirname, '..', 'market-autosms.json');
 
-const empty = () => ({ config: defaultConfig(), marketToken: null, merchantUid: null, sent: {}, log: [] });
+const empty = () => ({
+  config: defaultConfig(),
+  marketToken: null,
+  merchantUid: null,
+  sent: {},
+  log: [],
+});
 
 let state = null;
 
@@ -61,7 +67,7 @@ export const alreadySent = (code, event) => {
 };
 
 // Записать результат отправки (и в дедуп-карту, и в журнал для показа)
-export const recordSend = ({ code, event, status, phone, text, error, messageId }) => {
+export const recordSend = ({ code, event, status, phone, text, error, messageId, channel }) => {
   read();
   const key = `${code}:${event}`;
   const prev = state.sent[key] || { attempts: 0 };
@@ -77,6 +83,7 @@ export const recordSend = ({ code, event, status, phone, text, error, messageId 
     orderCode: String(code),
     event,
     status,
+    channel: channel || 'sms',
     phone: phone || '',
     text: text || '',
     error: error || null,
@@ -94,4 +101,17 @@ export const clearToken = () => {
   read();
   state.marketToken = null;
   write();
+};
+
+// Что уже ушло по заказам: { код: { new: 'sent', issued: 'failed' } }
+export const statusesFor = (codes) => {
+  read();
+  const out = {};
+  for (const code of codes) {
+    for (const ev of ['new', 'issued']) {
+      const rec = state.sent[`${code}:${ev}`];
+      if (rec) (out[code] ||= {})[ev] = rec.status;
+    }
+  }
+  return out;
 };

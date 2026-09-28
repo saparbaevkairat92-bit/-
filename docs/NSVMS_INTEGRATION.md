@@ -66,3 +66,21 @@ WMS переводит статусы Kaspi в свои состояния та�
 (`X-Kaspi-Token` + `X-Merchant-Uid`). Товары, цены, остатки и предзаказ — через вход в
 кабинет продавца (`X-Mc-Session`): этого через токен получить нельзя. Подробно —
 [MARKETPLACE.md](./MARKETPLACE.md#интеграция-с-ns-wms).
+
+### Раздел «Kaspi Магазин» в NS WMS
+
+В NS WMS для компаний из `KASPI_BRIDGE_ALLOWED_TENANTS` есть отдельный раздел
+«Kaspi Магазин» с четырьмя вкладками. Что он берёт у этого сервера:
+
+| Вкладка NS WMS | Вызовы сюда                                                                                         |
+| -------------- | --------------------------------------------------------------------------------------------------- |
+| Настройки      | `POST /api/market/cabinet/login` → `/cabinet/confirm-code` (или `/cabinet/login-cookies`)           |
+| Товары         | `GET /api/market/offers`, `POST /api/market/offers/update`, `GET /api/market/cards/{id}/competitors` |
+| Рассылка       | `POST /api/market/chat/send`, `POST /api/market/chat/probe`                                         |
+| Заказы         | ничего: NS WMS берёт заказы у Kaspi сам, по своему токену                                           |
+
+Сессию кабинета NS WMS хранит у компании (`settings.kaspi_mc_session`) и после
+каждого ответа сохраняет продлённую из заголовка `X-Mc-Session`. Авто-демпинг и
+авто-сообщения NS WMS крутит сам, по каждой компании отдельно, — фоновые
+`market-reprice.json` / `market-autosms.json` этого сервера для NS WMS не нужны
+(они для работы сервера отдельно, через его собственный интерфейс).
