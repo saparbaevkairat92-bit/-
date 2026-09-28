@@ -102,3 +102,19 @@ describe('kaspiChat', () => {
     await assert.rejects(chat.sendChatMessage({}, { orderCode: '', text: 't' }), (e) => e.status === 400);
   });
 });
+
+describe('разбор API виджета чата', () => {
+  it('находит все адреса, в том числе создание чата, и места вызова', async () => {
+    const { traceChatApi } = await import('../src/marketplace/chatDiscover.js');
+    const code =
+      'mt=axios.create({baseURL:"/chats/api/mobile"});' +
+      'async function nv(e){return mt.post("/api/v1/messages/sendMessage",{data:e})}' +
+      'async function cg(e){return mt.post("/api/v1/group/createGroupByOrder",e)}' +
+      'function open(o){return cg({orderCode:o.code,merchantId:o.m})}';
+    const r = traceChatApi([code]);
+    assert.ok(r.allPaths.includes('/api/v1/group/createGroupByOrder'));
+    const ep = r.endpoints['/api/v1/group/createGroupByOrder'];
+    assert.equal(ep.fn, 'cg');
+    assert.match(ep.calls[0], /orderCode/);
+  });
+});
