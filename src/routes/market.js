@@ -5,6 +5,9 @@ import * as cabinet from '../marketplace/cabinet.js';
 import { cardCompetitors } from '../marketplace/catalog.js';
 import { normalizeOrder, normalizeEntry, normalizeOffer } from '../marketplace/normalize.js';
 import { diagnose } from '../marketplace/loginHelpers.js';
+import * as customerSms from '../marketplace/customerSms.js';
+import * as smsStore from '../marketplace/autoSmsStore.js';
+import { runOnce as smsRunOnce, sendTest as smsSendTest } from '../marketplace/autoSmsPoller.js';
 
 // ═══════════════════════════════════════════════════
 //  Kaspi Маркетплейс — /api/market/*
@@ -343,6 +346,65 @@ router.get('/orders/:id/waybill', requireToken, async (req, res) => {
     pdf.body.pipe(res);
   } catch (err) {
     fail(res, err);
+  }
+});
+
+// ═══ Сообщения покупателю: авто-SMS «заказ принят» / «заказ выдан» ═══
+// Требует токен API продавца (заказы берутся по нему). Настройки и токен сервер
+// хранит у себя (market-autosms.json), чтобы рассылка шла в фоне без браузера.
+
+router.get('/sms', (req, res) => {
+  const st = smsStore.getState();
+  res.json({
+    config: customerSms.publicConfig(st.config),
+    tokenConnected: !!st.marketToken,
+    providers: customerSms.PROVIDERS.map((id) => ({ id, label: customerSms.PROVIDER_LABELS[id] })),
+    placeholders: customerSms.PLACEHOLDERS,
+    log: smsStore.recentLog(),
+  });
+});
+
+router.put('/sms', (req, res) => {
+  try {
+    const cfg = customerSms.mergeConfig(smsStore.getState().config, req.body || {}, Date.now());
+    // Включаем рассылку — нужен токен продавца: сохраняем присланный X-Market-Token
+    if (cfg.enabled) {
+      const auth = readTokenAuth(req);
+      if (!auth || auth.invalid) {
+        return res.status(400).json({ error: 'Сначала подключите токен API продавца на вкладке «Заказы».' });
+      }
+      const sealedHeader = req.headers['x-market-token'];
+      if (sealedHeader) smsStore.setToken(sealedHeader, auth.merchantUid);
+      else smsStore.setToken(seal({ token: auth.token, merchantUid: auth.merchantUid }), auth.merchantUid);
+    }
+    smsStore.setConfig(cfg);
+    res.json({ config: customerSms.publicConfig(cfg) });
+  } catch (err) {
+    const status = err instanceof customerSms.SmsError ? 400 : 500;
+    res.status(status).json({ error: err.message });
+  }
+});
+
+router.post('/sms/test', async (req, res) => {
+  const phone = String(req.body?.phone || '').trim();
+  if (!phone) return res.status(400).json({ error: 'Введите свой номер для пробного SMS.' });
+  if (!smsStore.getState().config.apiKey) return res.status(400).json({ error: 'Сохраните ключ SMS-сервиса.' });
+  try {
+    const { ok, detail, text } = await smsSendTest(phone, req.body?.event);
+    if (!ok) return res.status(502).json({ error: detail });
+    res.json({ sent: true, text });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+router.post('/sms/run', async (req, res) => {
+  if (!smsStore.getState().config.enabled) return res.status(400).json({ error: 'Рассылка выключена.' });
+  try {
+    const stats = await smsRunOnce();
+    res.json({ ...stats, log: smsStore.recentLog() });
+  } catch (err) {
+    res.status(502).json({ error: `Не удалось опросить заказы: ${err.message}` });
   }
 });
 

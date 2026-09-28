@@ -146,6 +146,7 @@
       <div class="tabs">
         <button class="tab active" id="tabOrders" onclick="switchTab('orders')">Заказы</button>
         <button class="tab" id="tabOffers" onclick="switchTab('offers')">Товары</button>
+        <button class="tab" id="tabSms" onclick="switchTab('sms')">Сообщения</button>
         <button class="tab" id="tabCompetitors" onclick="switchTab('competitors')">Конкуренты</button>
         <button class="tab" id="tabWms" onclick="switchTab('wms')">NS WMS</button>
       </div>
@@ -224,6 +225,72 @@
             <button class="btn btn-secondary" style="margin: 0" onclick="loadCompetitors()">Проверить</button>
           </div>
           <div id="competitorsList" style="margin-top: 12px"></div>
+        </div>
+      </div>
+
+      <!-- Сообщения покупателю -->
+      <div id="smsTab" class="hidden">
+        <div class="card">
+          <h2>Сообщения покупателю</h2>
+          <p class="muted">
+            Kaspi шлёт покупателю только свои уведомления. Здесь магазин сам отправляет SMS: «заказ принят» и «заказ
+            выдан» — автоматически. Заказы берутся по токену API (вкладка «Заказы»).
+          </p>
+          <div id="smsWarn"></div>
+
+          <label class="row" style="align-items: center; gap: 8px; margin-top: 8px">
+            <input type="checkbox" id="smsEnabled" style="width: auto" onchange="smsToggle()" />
+            <span><b>Отправлять SMS покупателям автоматически</b></span>
+          </label>
+          <p class="muted" id="smsEnabledHint" style="margin-top: 2px"></p>
+
+          <div class="row" style="margin-top: 8px">
+            <label style="flex: 1"><input type="checkbox" id="smsNew" style="width: auto" /> Новый заказ</label>
+            <label style="flex: 1"><input type="checkbox" id="smsIssued" style="width: auto" /> Заказ выдан</label>
+          </div>
+
+          <h2 style="margin-top: 16px; font-size: 16px">SMS-сервис магазина</h2>
+          <label>Сервис</label>
+          <select id="smsProvider"></select>
+          <div id="smsLoginWrap" class="hidden">
+            <label>Логин SMSC.kz</label>
+            <input type="text" id="smsLogin" autocomplete="off" />
+          </div>
+          <label>API-ключ (пароль) сервиса</label>
+          <input type="password" id="smsKey" autocomplete="off" placeholder="из личного кабинета SMS-сервиса" />
+          <p class="muted" id="smsKeyHint"></p>
+          <div class="row">
+            <div style="flex: 1">
+              <label>Имя отправителя</label>
+              <input type="text" id="smsSender" maxlength="11" placeholder="одобрено в сервисе" />
+            </div>
+            <div style="flex: 1">
+              <label>Магазин в тексте</label>
+              <input type="text" id="smsShop" placeholder="подставится вместо {shop}" />
+            </div>
+          </div>
+
+          <h2 style="margin-top: 16px; font-size: 16px">Тексты</h2>
+          <p class="muted" id="smsPlaceholders"></p>
+          <label>Новый заказ</label>
+          <textarea id="smsTplNew" rows="3" style="width: 100%"></textarea>
+          <label>Заказ выдан</label>
+          <textarea id="smsTplIssued" rows="3" style="width: 100%"></textarea>
+
+          <button class="btn btn-primary" id="btnSmsSave" onclick="smsSave()">Сохранить</button>
+          <div id="smsMsg" class="hidden" style="margin-top: 10px"></div>
+
+          <h2 style="margin-top: 16px; font-size: 16px">Проверка</h2>
+          <label>Ваш номер для пробного SMS</label>
+          <input type="tel" id="smsTestPhone" inputmode="numeric" placeholder="+7 701 234 56 78" />
+          <div class="row" style="margin-top: 8px">
+            <button class="btn btn-secondary" style="margin: 0" onclick="smsTest('new')">Пробное «принят»</button>
+            <button class="btn btn-secondary" style="margin: 0" onclick="smsTest('issued')">Пробное «выдан»</button>
+          </div>
+          <button class="btn btn-secondary" onclick="smsRun()">Проверить заказы сейчас</button>
+
+          <h2 style="margin-top: 16px; font-size: 16px">Журнал SMS</h2>
+          <div id="smsLog"></div>
         </div>
       </div>
 

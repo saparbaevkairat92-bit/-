@@ -9,6 +9,7 @@ import refundRoutes from './src/routes/refund.js';
 import sessionRoutes from './src/routes/session.js';
 import marketRoutes from './src/routes/market.js';
 import { startPolling } from './src/polling.js';
+import { startAutoSmsPolling } from './src/marketplace/autoSmsPoller.js';
 import 'dotenv/config';
 
 const app = express();
@@ -29,4 +30,5 @@ app.use('/api/market', marketRoutes);
 app.listen(PORT, () => {
   console.log(`\n  🟢 Kaspi Pay App running at http://localhost:${PORT}\n`);
   startPolling();
+  startAutoSmsPolling();
 });

@@ -18,3 +18,4 @@ tracked-payments.json
 webhook-retries.json
 logs/
 last-session.json
+market-autosms.json
