@@ -146,4 +146,15 @@ describe('разбор API виджета чата', () => {
     assert.equal(ep.fn, 'cg');
     assert.match(ep.calls[0], /orderCode/);
   });
+
+  it('ловит вызов открытия чата со страницы заказа кабинета (с type)', async () => {
+    const { traceChatApi } = await import('../src/marketplace/chatDiscover.js');
+    const code =
+      'const w={createChatById:(e,t,a)=>Ya().createChatById(e,t,a)};' +
+      'function onChat(o){window.webchat.createChatById(o.code,"MERCHANT_ORDER",location.href)}' +
+      'function alt(o){window.openWebchatById(o.id)}';
+    const calls = traceChatApi([code]).createCalls.join('\n');
+    assert.match(calls, /MERCHANT_ORDER/);
+    assert.match(calls, /openWebchatById\(o\.id\)/);
+  });
 });
