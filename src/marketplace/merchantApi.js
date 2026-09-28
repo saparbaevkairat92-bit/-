@@ -8,7 +8,7 @@
 //  - статус ARRIVED («товар поступил») здесь не отправляется вовсе: это заявление
 //    Kaspi, что товар физически есть, и делается только руками в кабинете.
 
-import fetch from 'node-fetch';
+import { fetchWithTimeout as fetch, KASPI_TIMEOUT_MS } from './http.js';
 import { MERCHANT_API_URL } from './config.js';
 import { ordersWindow } from './normalize.js';
 
@@ -41,7 +41,7 @@ export const authHeaders = ({ token, merchantUid }) => ({
   ...(merchantUid ? { 'X-Merchant-Uid': String(merchantUid) } : {}),
 });
 
-const request = async (auth, method, path, { params, body } = {}) => {
+const request = async (auth, method, path, { params, body, retries = MAX_RETRIES, timeoutMs } = {}) => {
   const url = new URL(MERCHANT_API_URL + path);
   for (const [k, v] of Object.entries(params || {})) {
     if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
@@ -55,16 +55,16 @@ const request = async (auth, method, path, { params, body } = {}) => {
   for (let attempt = 1; ; attempt++) {
     let resp;
     try {
-      resp = await fetch(url.toString(), { method, headers, body: body ? JSON.stringify(body) : undefined });
+      resp = await fetch(url.toString(), { method, headers, body: body ? JSON.stringify(body) : undefined }, timeoutMs);
     } catch (err) {
       // Kaspi иногда рвёт соединение — это ровно тот случай, когда нужен повтор
-      if (attempt >= MAX_RETRIES) throw new MerchantApiError(502, `Kaspi недоступен: ${err.message}`);
+      if (attempt >= retries) throw new MerchantApiError(504, `Kaspi недоступен: ${err.message}`);
       await sleep(RETRY_DELAY * attempt);
       continue;
     }
     console.log(`[market] ${method} ${url.pathname} → ${resp.status}`);
 
-    if ((resp.status === 429 || resp.status >= 500) && attempt < MAX_RETRIES) {
+    if ((resp.status === 429 || resp.status >= 500) && attempt < retries) {
       await sleep(RETRY_DELAY * attempt);
       continue;
     }
@@ -162,7 +162,11 @@ export const downloadWaybill = async (auth, waybillUrl) => {
 // (400, 5xx, сеть) — не повод терять введённый токен.
 export const verifyToken = async (auth) => {
   try {
-    await request(auth, 'GET', '/orders', { params: { 'page[number]': 0, 'page[size]': 1 } });
+    await request(auth, 'GET', '/orders', {
+      params: { 'page[number]': 0, 'page[size]': 1 },
+      retries: 1,
+      timeoutMs: Math.min(KASPI_TIMEOUT_MS, 20000),
+    });
     return { ok: true, warning: null };
   } catch (err) {
     if ((err.status === 401 || err.status === 403) && err.body !== null) throw err;

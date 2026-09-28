@@ -65,12 +65,13 @@ router.post('/connect', async (req, res) => {
   const token = String(req.body?.token || '').trim();
   const merchantUid = String(req.body?.merchantUid || '').trim() || null;
   if (!token) return res.status(400).json({ error: 'Укажите токен API из кабинета продавца (Настройки → Токен API).' });
+  const marketToken = seal({ token, merchantUid });
+  // Наружу — только последние 4 символа токена
+  const tokenHint = `…${token.slice(-4)}`;
   try {
     const check = await merchantApi.verifyToken({ token, merchantUid });
-    const marketToken = seal({ token, merchantUid });
-    // Наружу — только последние 4 символа токена
-    const tokenHint = `…${token.slice(-4)}`;
-    // Храним и на сервере: фоновые SMS и любой браузер берут токен отсюда
+    // Храним и на сервере: фоновые SMS и любой браузер берут токен отсюда.
+    // Сохраняем, даже если Kaspi не ответил, — отказ только на «неверный токен».
     shopStore.setToken(marketToken, tokenHint, merchantUid);
     smsStore.setToken(marketToken, merchantUid);
     res.json({ success: true, marketToken, merchantUid, tokenHint, verified: check.ok, warning: check.warning });

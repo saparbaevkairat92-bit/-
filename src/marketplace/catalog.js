@@ -7,7 +7,7 @@
 // ВАЖНО: витрина блокирует дата-центры — с Vercel/облака 30 из 30 запросов
 // получили 429 со страницей защиты от ботов. С обычного IP (офис, дом) работает.
 
-import fetch from 'node-fetch';
+import { fetchWithTimeout as fetch } from './http.js';
 import { PUBLIC_OFFERS_URL, DEFAULT_CITY_ID, BROWSER_UA } from './config.js';
 import { normalizeCardOffer } from './normalize.js';
 

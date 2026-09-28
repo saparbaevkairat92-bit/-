@@ -65,8 +65,23 @@ const authHeaders = () => {
   return h;
 };
 
+// Ни один запрос не ждёт бесконечно: сервер сам обрывает Kaspi через 25 с,
+// а браузер страхуется на случай, если не ответит и сервер
 const api = async (path, opts = {}) => {
-  const resp = await fetch(path, { ...opts, headers: { ...authHeaders(), ...(opts.headers || {}) } });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs || 90000);
+  let resp;
+  try {
+    resp = await fetch(path, { ...opts, signal: ctrl.signal, headers: { ...authHeaders(), ...(opts.headers || {}) } });
+  } catch (e) {
+    throw new Error(
+      e.name === 'AbortError'
+        ? 'Сервер не ответил вовремя. Проверьте, что он запущен, и попробуйте ещё раз.'
+        : `Нет связи с сервером: ${e.message}`,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
   const fresh = resp.headers.get('X-Mc-Session');
   if (fresh) setState({ mcSession: fresh });
   const body = await resp.json().catch(() => ({}));
@@ -960,6 +975,11 @@ const KIND = { reprice: ['Демпинг', 'v'], price: ['Цена', 'b'], stock
 
 const loadSettings = async () => {
   renderConnections();
+  // Номер магазина не должен пропадать: из прошлого ввода или из кабинета
+  if (!$('merchantUidInput').value) {
+    const g = getState();
+    $('merchantUidInput').value = g.tokenMerchantUid || g.merchantUid || '';
+  }
   await loadShopState();
   const st = shopState?.settings;
   if (st) {
@@ -1060,9 +1080,18 @@ const connectToken = async () => {
     $('tokenMsg').innerHTML = note('Вставьте токен из кабинета Kaspi: Настройки → Токен API.', 'err');
     return;
   }
-  $('tokenMsg').innerHTML = note('Проверяем токен в Kaspi…');
+  $('tokenMsg').innerHTML = note('Проверяем токен в Kaspi… (до 30 секунд)');
+  const btn = $('tokenForm').querySelector('button');
+  btn.disabled = true;
+  const merchantUid = $('merchantUidInput').value.trim();
+  setState({ tokenMerchantUid: merchantUid || null });
   try {
-    const r = await post('/api/market/connect', { token, merchantUid: $('merchantUidInput').value.trim() });
+    const r = await api('/api/market/connect', {
+      method: 'POST',
+      timeoutMs: 45000,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, merchantUid }),
+    });
     setState({ marketToken: r.marketToken, tokenHint: r.tokenHint, tokenMerchantUid: r.merchantUid });
     $('tokenInput').value = '';
     await loadShopState();
@@ -1074,6 +1103,8 @@ const connectToken = async () => {
         );
   } catch (e) {
     $('tokenMsg').innerHTML = note(`Токен не сохранён: ${esc(e.message)}`, 'err');
+  } finally {
+    btn.disabled = false;
   }
 };
 
