@@ -227,6 +227,17 @@ export const traceChatApi = (texts) => {
     }
   }
   result.createCalls = [...new Set(result.createCalls)].slice(0, 16);
+  // Значения типа чата, что встречаются в коде виджета: type:"X", type==="X"
+  // и константы с ORDER — среди них тот, что ждёт startChat
+  const types = new Set();
+  for (const text of texts) {
+    for (const re of [
+      /\btype\s*(?:===?|:)\s*["'`]([A-Za-z][\w-]{1,40})["'`]/g,
+      /["'`]([A-Z][A-Z_]*ORDER[A-Z_]*)["'`]/g,
+    ])
+      for (const m of findAll(text, re, 400)) types.add(m[1]);
+  }
+  result.typeLiterals = [...types].slice(0, 120);
   result.client = [...new Set(result.client)].slice(0, 12);
   result.auth = [...new Set(result.auth)].slice(0, 16);
   return result;

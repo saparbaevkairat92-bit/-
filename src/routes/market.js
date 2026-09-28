@@ -9,7 +9,7 @@ import * as smsStore from '../marketplace/autoSmsStore.js';
 import * as shopStore from '../marketplace/shopStore.js';
 import { runOnce as smsRunOnce, sendTest as smsSendTest } from '../marketplace/autoSmsPoller.js';
 import { discoverChat } from '../marketplace/chatDiscover.js';
-import { sendChatMessage, ChatError } from '../marketplace/kaspiChat.js';
+import { sendChatMessage, ChatError, PROBE_START_TYPES } from '../marketplace/kaspiChat.js';
 
 // ═══════════════════════════════════════════════════
 //  Kaspi Маркетплейс — /api/market/*
@@ -425,6 +425,7 @@ router.post('/chat/probe', requireCabinet, async (req, res) => {
       orderId: req.body?.orderId,
       merchantUid: req.cabinet.merchantUid,
       dryRun: true,
+      types: PROBE_START_TYPES,
     });
     refreshCabinet(req, res, r.jar);
     res.json({ found: true, chatId: r.chatId, trace: r.trace });
