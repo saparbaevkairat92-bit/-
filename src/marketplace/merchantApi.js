@@ -157,7 +157,15 @@ export const downloadWaybill = async (auth, waybillUrl) => {
 };
 
 // Проверка токена: самый дешёвый запрос — одна страница заказов из одного элемента
+// Так же проверяет токен рабочий NS WMS: одна страница /orders без фильтров.
+// Неверным токен считаем только при 401/403 от самого API; остальные ответы
+// (400, 5xx, сеть) — не повод терять введённый токен.
 export const verifyToken = async (auth) => {
-  await listOrders(auth, { days: 1, size: 1 });
-  return true;
+  try {
+    await request(auth, 'GET', '/orders', { params: { 'page[number]': 0, 'page[size]': 1 } });
+    return { ok: true, warning: null };
+  } catch (err) {
+    if ((err.status === 401 || err.status === 403) && err.body !== null) throw err;
+    return { ok: false, warning: err.message };
+  }
 };

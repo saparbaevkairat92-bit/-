@@ -62,6 +62,7 @@ router.get('/state', (req, res) => {
     settings: st.settings,
     cabinet: { connected: !!st.mcSession, needLogin: !!st.needLogin, merchantUid: st.merchantUid },
     token: !!token && !token.invalid,
+    tokenSaved: st.marketToken ? { hint: st.tokenHint, merchantUid: st.tokenMerchantUid } : null,
     lastRunMs: st.lastRunMs,
     cards: cards.length,
     lastSync: cards.reduce((m, c) => Math.max(m, c.syncedAt || 0), 0) || null,

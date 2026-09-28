@@ -102,10 +102,13 @@ const busy = async (btn, fn) => {
   }
 };
 
+// Токен есть, если он в этом браузере или сохранён на сервере
+const hasToken = () => !!getState().marketToken || !!shopState?.tokenSaved;
+
 const renderPills = () => {
   const s = getState();
-  $('pillToken').className = `pill ${s.marketToken ? 'on' : ''}`;
-  $('pillToken').textContent = s.marketToken ? 'Токен подключён' : 'Нет токена';
+  $('pillToken').className = `pill ${hasToken() ? 'on' : ''}`;
+  $('pillToken').textContent = hasToken() ? 'Токен подключён' : 'Нет токена';
   const need = shopState?.cabinet?.needLogin;
   $('pillCabinet').className = `pill ${s.mcSession ? (need ? 'warn' : 'on') : ''}`;
   $('pillCabinet').textContent = s.mcSession
@@ -253,7 +256,7 @@ const renderOrders = () => {
 };
 
 const loadOrders = async (refresh = false) => {
-  if (!getState().marketToken) {
+  if (!hasToken()) {
     $('ordersWarn').innerHTML = note('Подключите токен API продавца во вкладке «Настройки» — заказы берутся по нему.');
     ordersData = null;
     $('ordersList').innerHTML = '';
@@ -862,7 +865,7 @@ const loadMessages = async () => {
     $('mPlaceholders').textContent =
       `Подстановки: ${s.placeholders.map((p) => `{${p}}`).join(' ')}. У карточек со своим текстом — их текст.`;
     const warn = [];
-    if (!s.tokenConnected && !getState().marketToken)
+    if (!s.tokenConnected && !hasToken())
       warn.push('Заказы для рассылки берутся по токену — подключите его в «Настройках».');
     if ((msgChannel === 'chat' || msgChannel === 'chat_sms') && !getState().mcSession)
       warn.push('Для чата Kaspi войдите в кабинет продавца в «Настройках».');
@@ -931,9 +934,13 @@ const probeChat = () =>
 
 const renderConnections = () => {
   const s = getState();
-  $('tokenForm').classList.toggle('hidden', !!s.marketToken);
-  $('tokenState').classList.toggle('hidden', !s.marketToken);
-  $('tokenInfo').textContent = s.marketToken ? `магазин ${s.tokenMerchantUid || '—'}, токен ${s.tokenHint || ''}` : '';
+  const saved = shopState?.tokenSaved;
+  const on = hasToken();
+  $('tokenForm').classList.toggle('hidden', on);
+  $('tokenState').classList.toggle('hidden', !on);
+  $('tokenInfo').textContent = on
+    ? `магазин ${s.tokenMerchantUid || saved?.merchantUid || '—'}, токен ${s.tokenHint || saved?.hint || ''}`
+    : '';
   $('cabinetForm').classList.toggle('hidden', !!s.mcSession);
   $('cabinetState').classList.toggle('hidden', !s.mcSession);
   $('merchantSelect').innerHTML = (s.merchants || [])
@@ -1046,19 +1053,36 @@ const smsTest = (field = 'smsTestPhone') =>
     toast(`Отправлено: «${r.text}»`);
   });
 
-const connectToken = () =>
-  busy(null, async () => {
-    const token = $('tokenInput').value.trim();
-    if (!token) throw new Error('Введите токен');
+// Результат подключения токена — на экране, а не во всплывашке, которая исчезает
+const connectToken = async () => {
+  const token = $('tokenInput').value.trim();
+  if (!token) {
+    $('tokenMsg').innerHTML = note('Вставьте токен из кабинета Kaspi: Настройки → Токен API.', 'err');
+    return;
+  }
+  $('tokenMsg').innerHTML = note('Проверяем токен в Kaspi…');
+  try {
     const r = await post('/api/market/connect', { token, merchantUid: $('merchantUidInput').value.trim() });
     setState({ marketToken: r.marketToken, tokenHint: r.tokenHint, tokenMerchantUid: r.merchantUid });
     $('tokenInput').value = '';
-    toast('Токен подключён');
+    await loadShopState();
     renderConnections();
-  });
+    $('tokenMsg').innerHTML = r.verified
+      ? note('Токен сохранён, Kaspi его принял.', 'ok')
+      : note(
+          `Токен сохранён, но проверочный запрос к Kaspi не прошёл: ${esc(r.warning)}. Откройте «Заказы» — там будет видно, отвечает ли Kaspi.`,
+        );
+  } catch (e) {
+    $('tokenMsg').innerHTML = note(`Токен не сохранён: ${esc(e.message)}`, 'err');
+  }
+};
 
-const disconnectToken = () => {
+const disconnectToken = async () => {
+  if (!confirm('Отключить токен? Заказы и рассылка перестанут работать до нового подключения.')) return;
   setState({ marketToken: null, tokenHint: null, tokenMerchantUid: null });
+  await post('/api/market/disconnect').catch(() => null);
+  await loadShopState();
+  $('tokenMsg').innerHTML = '';
   renderConnections();
 };
 
