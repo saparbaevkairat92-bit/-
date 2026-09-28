@@ -92,6 +92,25 @@ POST /api/market/offers/update
 Отправляются только переданные поля: пустая цена не обнуляет цену на Kaspi. Цена
 должна быть > 0, остаток — целое ≥ 0, предзаказ — 0..30 дней.
 
+### Сообщения покупателю — авто-SMS (токен)
+
+Магазин сам шлёт покупателю SMS «заказ принят» и «заказ выдан». Заказы берутся
+официальным API по токену продавца; SMS-сервис — Mobizon или SMSC.kz. Сервер
+хранит настройки и токен у себя (`market-autosms.json`) и рассылает в фоне
+(интервал — `CUSTOMER_SMS_INTERVAL_SEC`, по умолчанию 180 с), без открытого браузера.
+
+```
+GET  /api/market/sms                         → {config, tokenConnected, providers, log}
+PUT  /api/market/sms  {provider, apiKey?, login?, sender?, shopName?,
+                       notifyNew, notifyIssued, templateNew, templateIssued, enabled}
+POST /api/market/sms/test  {phone, event}    → пробное SMS на свой номер
+POST /api/market/sms/run                     → разовый проход (то же, что фон)
+```
+
+Одно SMS на событие (защита от дублей — журнал по «код заказа + событие»), только
+по заказам после включения, ключ сервиса наружу не отдаётся. Тексты: `{name}`,
+`{order}`, `{shop}`, `{sum}`.
+
 ### Конкуренты (витрина)
 
 ```

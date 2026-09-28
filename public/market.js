@@ -235,7 +235,7 @@ const selectMerchant = async () => {
 
 // ═══ Вкладки ═══
 
-const TABS = ['orders', 'offers', 'competitors', 'wms'];
+const TABS = ['orders', 'offers', 'sms', 'competitors', 'wms'];
 
 const switchTab = (tab) => {
   for (const t of TABS) {
@@ -243,6 +243,7 @@ const switchTab = (tab) => {
     $(`tab${t[0].toUpperCase()}${t.slice(1)}`).classList.toggle('active', t === tab);
   }
   if (tab === 'wms') renderWms();
+  if (tab === 'sms') loadSms();
 };
 
 // ═══ Заказы ═══
@@ -518,6 +519,124 @@ const renderWms = async () => {
   } catch (e) {
     $('wmsCaps').textContent = e.message;
   }
+};
+
+// ═══ Сообщения покупателю (авто-SMS) ═══
+
+let smsData = null;
+
+const loadSms = async () => {
+  try {
+    smsData = await api('/api/market/sms');
+  } catch (e) {
+    return showMsg('smsMsg', e.message, 'err');
+  }
+  const c = smsData.config;
+  $('smsWarn').innerHTML = smsData.tokenConnected
+    ? ''
+    : '<div class="status-bar status-warn">Подключите токен API продавца на вкладке «Заказы» — по нему берутся заказы.</div>';
+  $('smsProvider').innerHTML = smsData.providers
+    .map((p) => `<option value="${esc(p.id)}"${p.id === c.provider ? ' selected' : ''}>${esc(p.label)}</option>`)
+    .join('');
+  $('smsProvider').onchange = smsProviderChange;
+  $('smsEnabled').checked = c.enabled;
+  $('smsNew').checked = c.notifyNew;
+  $('smsIssued').checked = c.notifyIssued;
+  $('smsLogin').value = c.login;
+  $('smsKey').value = '';
+  $('smsKey').placeholder = c.apiKeySet ? c.apiKeyHint : 'из личного кабинета SMS-сервиса';
+  $('smsKeyHint').textContent = c.apiKeySet ? `Сохранён ${c.apiKeyHint}. Оставьте пустым, чтобы не менять.` : '';
+  $('smsSender').value = c.sender;
+  $('smsShop').value = c.shopName;
+  $('smsTplNew').value = c.templateNew;
+  $('smsTplIssued').value = c.templateIssued;
+  $('smsPlaceholders').textContent = `Подстановки: ${smsData.placeholders.map((p) => `{${p}}`).join(', ')}`;
+  $('smsEnabledHint').textContent = c.enabled
+    ? 'Включено. SMS уходят по заказам, оформленным после включения.'
+    : 'По заказам после включения. Старым покупателям ничего не уйдёт.';
+  smsProviderChange();
+  renderSmsLog(smsData.log);
+};
+
+const smsProviderChange = () => {
+  $('smsLoginWrap').classList.toggle('hidden', $('smsProvider').value !== 'smsc');
+};
+
+const smsFormBody = () => ({
+  provider: $('smsProvider').value,
+  login: $('smsLogin').value.trim(),
+  apiKey: $('smsKey').value.trim(),
+  sender: $('smsSender').value.trim(),
+  shopName: $('smsShop').value.trim(),
+  notifyNew: $('smsNew').checked,
+  notifyIssued: $('smsIssued').checked,
+  templateNew: $('smsTplNew').value,
+  templateIssued: $('smsTplIssued').value,
+});
+
+const smsSave = async (extra) => {
+  showMsg('smsMsg', 'Сохраняем…', 'info');
+  try {
+    const r = await post('/api/market/sms', { ...smsFormBody(), ...(extra || {}) });
+    smsData.config = r.config;
+    $('smsKey').value = '';
+    showMsg('smsMsg', r.config.enabled ? 'Сохранено. SMS будут уходить автоматически.' : 'Сохранено', 'ok');
+    loadSms();
+  } catch (e) {
+    showMsg('smsMsg', e.message, 'err');
+  }
+};
+
+const smsToggle = () => smsSave({ enabled: $('smsEnabled').checked });
+
+const smsTest = async (event) => {
+  const phone = $('smsTestPhone').value.trim();
+  if (!phone) return showMsg('smsMsg', 'Введите свой номер для пробного SMS', 'err');
+  showMsg('smsMsg', 'Отправляем пробное…', 'info');
+  try {
+    const r = await post('/api/market/sms/test', { phone, event });
+    showMsg('smsMsg', `Отправлено: «${r.text}»`, 'ok');
+  } catch (e) {
+    showMsg('smsMsg', e.message, 'err');
+  }
+};
+
+const smsRun = async () => {
+  showMsg('smsMsg', 'Проверяем заказы…', 'info');
+  try {
+    const r = await post('/api/market/sms/run', {});
+    renderSmsLog(r.log);
+    showMsg('smsMsg', r.sent || r.failed ? `Отправлено ${r.sent}, не ушло ${r.failed}` : 'Новых событий нет', 'ok');
+  } catch (e) {
+    showMsg('smsMsg', e.message, 'err');
+  }
+};
+
+const SMS_STATUS = {
+  sent: ['Отправлено', 'badge-paid'],
+  failed: ['Не ушло', 'badge-canceled'],
+  skipped: ['Пропущено', 'badge-expired'],
+};
+const SMS_EVENT = { new: 'Принят', issued: 'Выдан' };
+
+const renderSmsLog = (log) => {
+  if (!log || !log.length)
+    return ($('smsLog').innerHTML = '<p class="muted" style="text-align:center">Пока ничего не отправлялось</p>');
+  $('smsLog').innerHTML = log
+    .map((r) => {
+      const [label, cls] = SMS_STATUS[r.status] || SMS_STATUS.skipped;
+      return `
+      <div class="op-item">
+        <div class="op-row">
+          <span class="op-name">№ ${esc(r.orderCode)} · ${esc(SMS_EVENT[r.event] || r.event)}</span>
+          <span class="badge ${cls}">${esc(label)}</span>
+        </div>
+        <div class="op-date">${esc(r.phone)}${r.text ? ` · ${esc(r.text)}` : ''}</div>
+        ${r.error ? `<div class="op-date" style="color:#c62828">${esc(r.error)}</div>` : ''}
+        <div class="op-date">${esc(dateTime(r.at))}</div>
+      </div>`;
+    })
+    .join('');
 };
 
 window.addEventListener('DOMContentLoaded', () => {
