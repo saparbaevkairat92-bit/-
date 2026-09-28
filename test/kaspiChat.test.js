@@ -123,7 +123,10 @@ describe('kaspiChat', () => {
 
   it('reports missing chat, rejection and expired session', async () => {
     mode = 'nochat';
-    await assert.rejects(chat.sendChatMessage({}, { orderCode: '1', text: 't' }), (e) => e.status === 404);
+    await assert.rejects(
+      chat.sendChatMessage({}, { orderCode: '1', text: 't' }),
+      (e) => e.status === 404 && /Kaspi ответил на начать чат \(\w+, 1\): HTTP 404/.test(e.message),
+    );
     mode = 'reject';
     await assert.rejects(chat.sendChatMessage({}, { orderCode: '777', text: 't' }), /не принял/);
     mode = 'expired';
