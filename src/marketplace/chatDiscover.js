@@ -53,7 +53,7 @@ const extractSnippets = (text, into) => {
     }
   }
   // Как кабинет собирает адрес файла виджета из FRONT_WEB_CHAT_URL — берём шире
-  for (const needle of ['FRONT_WEB_CHAT_URL', 'WebChatInitializer', 'accessToWebChat']) {
+  for (const needle of ['FRONT_WEB_CHAT_URL', 'WebChatInitializer', 'initChat']) {
     let from = 0;
     for (let n = 0; n < 4; n++) {
       const i = text.indexOf(needle, from);
@@ -95,18 +95,18 @@ const extractWidgetBases = (text) => {
   return bases;
 };
 
+// Кабинет грузит виджет ровно по FRONT_WEB_CHAT_URL, без расширения
+// (loadScript(FRONT_WEB_CHAT_URL) → window.initChat) — этот адрес первым
 const widgetVariants = (base) =>
   /\.m?js$/.test(base)
     ? [base]
     : [
+        base,
         `${base}.js`,
         `${base}/index.js`,
         `${base}/main.js`,
         `${base}/webchat-widget.js`,
-        `${base}/webchat-widget.mjs`,
-        `${base}/index.mjs`,
         `${base}/manifest.json`,
-        `${base}/index.html`,
         `${base}/`,
       ];
 
@@ -131,7 +131,7 @@ const extractWidgetTails = (text) => {
 
 // Ленивые чанки Vite: "assets/Имя-хэш.js" считается от корня кабинета (/mc/),
 // а "./Имя-хэш.js" — от самого скрипта. Чат может жить в одном из них.
-const extractViteChunks = (text, scriptUrl) => {
+const extractViteChunks = (text, scriptUrl, root = CABINET_HOME_URL) => {
   const urls = new Set();
   const add = (rel, base) => {
     try {
@@ -142,7 +142,7 @@ const extractViteChunks = (text, scriptUrl) => {
   };
   let m;
   const fromRoot = /["'`](?:\/mc\/)?(assets\/[\w.-]+\.js)["'`]/g;
-  while ((m = fromRoot.exec(text)) !== null) add(m[1], CABINET_HOME_URL);
+  while ((m = fromRoot.exec(text)) !== null) add(m[1], root);
   const fromScript = /["'`](\.\/[\w.-]+\.js)["'`]/g;
   while ((m = fromScript.exec(text)) !== null) add(m[1], scriptUrl);
   return urls;
@@ -243,7 +243,7 @@ export const discoverChat = async (jar) => {
     }
     // Сам виджет — его чанки
     for (const c of extractChunkUrls(text, url)) queue.unshift(c);
-    for (const c of extractViteChunks(text, url)) queue.push(c);
+    for (const c of extractViteChunks(text, url, url)) queue.push(c);
   }
   fetched = 0;
   await fetchQueue();
