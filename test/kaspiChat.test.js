@@ -120,6 +120,14 @@ describe('kaspiChat', () => {
     assert.ok(types.includes('MERCHANT_ORDER') && types.length === chat.PROBE_START_TYPES.length);
   });
 
+  it('describeJar показывает имена cookie и срок t_token без значений', () => {
+    const payload = Buffer.from(JSON.stringify({ exp: 2000000000 })).toString('base64url');
+    const d = chat.describeJar({ a: 'secret', t_token: `h.${payload}.s` });
+    assert.match(d, /cookie: a, t_token; t_token до 2033/);
+    assert.ok(!d.includes('secret'));
+    assert.match(chat.describeJar({}), /t_token нет/);
+  });
+
   it('dry run only searches', async () => {
     mode = 'ok';
     seen.length = 0;

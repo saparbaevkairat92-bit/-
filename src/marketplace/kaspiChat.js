@@ -199,10 +199,25 @@ const rejectedWhy = (data) => {
   return null;
 };
 
+// Что есть в сессии для чата (имена cookie, срок t_token) — без значений
+export const describeJar = (jar) => {
+  const names = Object.keys(jar || {});
+  let tok = 't_token нет';
+  if (jar?.t_token) {
+    try {
+      const p = JSON.parse(Buffer.from(String(jar.t_token).split('.')[1], 'base64url').toString());
+      tok = p.exp ? `t_token до ${new Date(p.exp * 1000).toISOString()}` : 't_token без срока';
+    } catch {
+      tok = 't_token не JWT';
+    }
+  }
+  return `cookie: ${names.join(', ') || 'нет'}; ${tok}`;
+};
+
 // Найти чат заказа, а если его ещё нет — начать (startChat)
 export const findChat = async (jar, { orderCode, orderId, phone, merchantUid, types = CHAT_START_TYPES }) => {
   const vars = { order: String(orderCode || ''), phone: phone || '', merchantUid: merchantUid || '' };
-  const trace = [];
+  const trace = [{ step: 'сессия', status: 0, body: describeJar(jar) }];
   const r = await chatCall(jar, CHAT_SEARCH_PATH, fillTemplate(SEARCH_BODY, vars));
   trace.push({ step: 'поиск', status: r.status, body: short(r.data) });
   checkAuth(r, trace);
@@ -246,7 +261,12 @@ export const sendChatMessage = async (
     const last = tried[tried.length - 1];
     const codes = tried.map((t) => `${t.step.replace('начать чат ', '')} → ${t.status}`).join('; ');
     const why = last ? ` Попытки открыть: ${codes}. Последний ответ: ${short(last.body).slice(0, 140)}` : '';
-    throw new ChatError(404, `Чат по заказу №${code} не найден и не открылся в кабинете Kaspi.${why}`, trace);
+    const search = trace.find((t) => t.step === 'поиск');
+    const hint =
+      search && search.status >= 500
+        ? ' Сервер чата Kaspi отвечает ошибкой даже на поиск — он не принимает сессию, дело не в заказе.'
+        : '';
+    throw new ChatError(404, `Чат по заказу №${code} не найден и не открылся в кабинете Kaspi.${hint}${why}`, trace);
   }
   if (dryRun) return { ok: true, sent: false, chatId: found.chatId, jar: found.jar, trace };
 

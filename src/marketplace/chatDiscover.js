@@ -227,6 +227,14 @@ export const traceChatApi = (texts) => {
     }
   }
   result.createCalls = [...new Set(result.createCalls)].slice(0, 16);
+  // Как виджет готовит запрос: базовые адреса сервисов, перехватчики запроса
+  // (заголовки авторизации) и хранилище токена — без них чат отвечает 500
+  result.requestSetup = [];
+  for (const text of texts) {
+    for (const re of [/interceptors\.request\.use\(/g, /baseURL:/g, /["']token["'],\(\)=>/g, /Authorization/g])
+      for (const m of findAll(text, re, 4)) result.requestSetup.push(around(text, m.index, 300, 700));
+  }
+  result.requestSetup = [...new Set(result.requestSetup)].slice(0, 16);
   // Значения типа чата, что встречаются в коде виджета: type:"X", type==="X"
   // и константы с ORDER — среди них тот, что ждёт startChat
   const types = new Set();
