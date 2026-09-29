@@ -116,7 +116,8 @@ describe('kaspiChat', () => {
     assert.equal(r.jar['mc-sid'], 'fresh', 'cabinet cookies refreshed');
     const send = seen.find((s) => s.path.endsWith('/sendMessage'));
     assert.equal(send.headers['x-platform-type'], 'WEB');
-    assert.match(send.headers['x-app-id'], /^[0-9a-f-]{36}$/);
+    assert.match(send.headers['x-app-id'], /^[0-9A-F-]{36}$/);
+    assert.equal(send.headers.referer, 'https://kaspi.kz/');
     // Тело — ровно как у виджета кабинета
     const b = JSON.parse(send.body);
     assert.deepEqual(b.data, { text: 'Спасибо!' });

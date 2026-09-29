@@ -59,8 +59,9 @@ export const PROBE_START_TYPES = [
 // Заголовки виджета для сервиса чата — точно как в его коде:
 //   W4: {"X-App-ID": appId, "X-Platform-Type": "WEB", "X-Auth-Type": "Webchat"}
 //   q4: "X-Locale": "ru-RU";  Y4: "X-Merchant-ID": merchantId
-// Авторизация — cookie t_token (withCredentials), заголовка Authorization нет.
-export const CHAT_APP_ID = process.env.KASPI_CHAT_APP_ID || crypto.randomUUID();
+// Авторизация — cookie сессии кабинета (mc-session, mc-sid), заголовка
+// Authorization нет. Проверено по живому запросу браузера (web/segments → 200).
+export const CHAT_APP_ID = process.env.KASPI_CHAT_APP_ID || crypto.randomUUID().toUpperCase();
 export const CHAT_AUTH_TYPE = process.env.KASPI_CHAT_AUTH_TYPE || 'Webchat';
 
 const chatHeaders = (merchantId) => ({
@@ -71,18 +72,9 @@ const chatHeaders = (merchantId) => ({
   ...(merchantId ? { 'X-Merchant-ID': String(merchantId) } : {}),
 });
 
-// Токен чата t_token (JWT): кабинет отдаёт его виджету (merchant context
-// tToken). После входа по SMS его в сессии нет — получаем сами. Адреса можно
-// переопределить: KASPI_CHAT_TOKEN_URLS="POST https://…,GET https://…"
-export const CHAT_TOKEN_URLS = (
-  process.env.KASPI_CHAT_TOKEN_URLS ||
-  [
-    `POST ${CABINET_URL}/crm/token/refresh`,
-    `GET ${CABINET_URL}/crm/token/refresh`,
-    'POST https://kaspi.kz/mc/crm/token/refresh',
-    `GET ${CABINET_URL}/s/m`,
-  ].join(',')
-)
+// t_token для чата не нужен (браузер ходит без него) — по умолчанию не
+// запрашиваем; можно включить: KASPI_CHAT_TOKEN_URLS="GET https://…"
+export const CHAT_TOKEN_URLS = (process.env.KASPI_CHAT_TOKEN_URLS || '')
   .split(',')
   .map((x) => x.trim().split(/\s+/))
   .filter((x) => x.length === 2)
@@ -117,7 +109,7 @@ export const findJwt = (data, depth = 0) => {
 };
 
 const ensureChatToken = async (jar, trace) => {
-  if (tokenValid(jar?.t_token)) return jar;
+  if (!CHAT_TOKEN_URLS.length || tokenValid(jar?.t_token)) return jar;
   let cur = jar || {};
   for (const { method, url } of CHAT_TOKEN_URLS) {
     let resp;
@@ -260,7 +252,7 @@ const chatCall = async (jar, path, body, merchantId) => {
         'Accept-Language': 'ru-RU,ru;q=0.9',
         'Content-Type': 'application/json',
         Origin: 'https://kaspi.kz',
-        Referer: 'https://kaspi.kz/mc/',
+        Referer: 'https://kaspi.kz/',
         ...(jar && Object.keys(jar).length ? { Cookie: cookieHeader(jar) } : {}),
         ...chatHeaders(merchantId),
       },
@@ -325,6 +317,7 @@ export const findChat = async (jar, { orderCode, orderId, phone, merchantUid, ty
   const trace = [{ step: 'сессия', status: 0, body: describeJar(jar) }];
   const withToken = await ensureChatToken(jar, trace);
   const mid = merchantUid || jwtPayload(withToken.t_token)?.merchantId || '';
+  trace[0].body += `; магазин: ${mid || 'не известен'}`;
   const r = await chatCall(withToken, CHAT_SEARCH_PATH, fillTemplate(SEARCH_BODY, vars), mid);
   trace.push({ step: 'поиск', status: r.status, body: short(r.data) });
   checkAuth(r, trace);
