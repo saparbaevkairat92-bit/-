@@ -119,6 +119,19 @@ const fakeKaspi = (req, res) => {
         res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'MS_AUTH_SSO=sso2; Path=/' });
         return res.end(JSON.stringify({ phone: j._ph }));
       }
+      // Вход по e-mail и паролю: _u/_p
+      if (j._u !== undefined) {
+        if (j._u !== 'owner@shop.kz' || j._p !== 'Secret123') {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ errorCode: 'CREDENTIALS_INVALID', message: 'Неверный логин или пароль' }));
+        }
+        if (mode === 'pw-mfa') {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ errorCode: 'MFA_REQUIRED' }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-auth=1; Path=/; HttpOnly' });
+        return res.end(JSON.stringify({ redirectUrl: '/' }));
+      }
       // Шаг кода: _c
       if (j._c !== undefined) {
         if (j._c !== '112233') {
@@ -236,6 +249,39 @@ describe('POST /api/market/cabinet/* (phone + SMS)', () => {
 
   it('confirm-code rejects a garbage pending token', async () => {
     const r = await post('/api/market/cabinet/confirm-code', { mcPending: 'not-a-token', code: '112233' });
+    assert.equal(r.status, 400);
+  });
+
+  it('e-mail и пароль: сразу рабочая сессия', async () => {
+    mode = 'ok';
+    const r = await post('/api/market/cabinet/login', { email: ' Owner@Shop.kz ', password: 'Secret123' });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.merchantUid, '30322035');
+    assert.ok(r.body.mcSession);
+    const sent = JSON.parse(seen.filter((s) => s.path === '/api/p/login').pop().body);
+    assert.equal(sent._u, 'owner@shop.kz');
+  });
+
+  it('e-mail и пароль: неверный пароль — понятная ошибка', async () => {
+    mode = 'ok';
+    const r = await post('/api/market/cabinet/login', { email: 'owner@shop.kz', password: 'nope' });
+    assert.equal(r.status, 401);
+    assert.match(r.body.error, /неверный логин или пароль/i);
+  });
+
+  it('e-mail и пароль: Kaspi просит код — дальше тот же шаг кода', async () => {
+    mode = 'pw-mfa';
+    const r = await post('/api/market/cabinet/login', { email: 'owner@shop.kz', password: 'Secret123' });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.needCode, true);
+    mode = 'ok';
+    const ok = await post('/api/market/cabinet/confirm-code', { mcPending: r.body.mcPending, code: '112233' });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal(ok.body.merchantUid, '30322035');
+  });
+
+  it('e-mail без @ не уходит в Kaspi', async () => {
+    const r = await post('/api/market/cabinet/login', { email: 'owner', password: 'x' });
     assert.equal(r.status, 400);
   });
 

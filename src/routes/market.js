@@ -91,6 +91,16 @@ router.post('/disconnect', (req, res) => {
 // Шаг 1: телефон → Kaspi шлёт SMS. Возвращает needCode + запечатанный mcPending.
 router.post('/cabinet/login', async (req, res) => {
   const phone = String(req.body?.phone || req.body?.login || '').trim();
+  // Вход по e-mail и паролю
+  if (req.body?.email || req.body?.password) {
+    try {
+      const r = await cabinet.startPasswordLogin(req.body?.email || phone, req.body?.password);
+      if (r.needCode) return res.json({ needCode: true, message: r.message, mcPending: seal(r.pending) });
+      return cabinetOk(res, req, r);
+    } catch (err) {
+      return fail(res, err);
+    }
+  }
   try {
     const { pending } = await cabinet.startPhoneLogin(phone);
     res.json({ needCode: true, mcPending: seal(pending) });
