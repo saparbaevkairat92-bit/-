@@ -31,9 +31,9 @@ export const CHAT_SEND_PATH = process.env.KASPI_CHAT_SEND_PATH || '/api/v1/messa
 //   ответ: data.id — номер чата (groupId). Поиск находит только уже открытые
 //   чаты — если покупатель ещё не писал, чат нужно начать.
 export const CHAT_START_PATH = process.env.KASPI_CHAT_START_PATH || '/api/v1/group/startChat';
-// Какой type у чата по заказу, в коде виджета не видно (его передаёт кабинет) —
-// пробуем по очереди; KASPI_CHAT_START_TYPES переопределяет список
-export const CHAT_START_TYPES = (process.env.KASPI_CHAT_START_TYPES || 'ORDER,order')
+// Тип чата «покупатель — продавец по заказу» из кода виджета:
+// CLIENT_SELLER_BY_ORDER; KASPI_CHAT_START_TYPES переопределяет список
+export const CHAT_START_TYPES = (process.env.KASPI_CHAT_START_TYPES || 'CLIENT_SELLER_BY_ORDER')
   .split(',')
   .map((t) => t.trim())
   .filter(Boolean);
@@ -42,6 +42,7 @@ export const CHAT_START_TYPES = (process.env.KASPI_CHAT_START_TYPES || 'ORDER,or
 export const PROBE_START_TYPES = [
   ...new Set([
     ...CHAT_START_TYPES,
+    'CLIENT_SELLER_BY_ORDER',
     'ORDER',
     'order',
     'MERCHANT_ORDER',
@@ -54,6 +55,24 @@ export const PROBE_START_TYPES = [
     'CLIENT',
   ]),
 ];
+
+// Заголовки виджета для сервиса чата (из кода: {"X-App-ID", "X-Platform-Type":
+// "WEB", "X-Auth-Type"}). X-App-ID — постоянный id «браузера».
+export const CHAT_APP_ID = process.env.KASPI_CHAT_APP_ID || crypto.randomUUID();
+// Значение X-Auth-Type пока неизвестно точно: пробуем варианты на поиске и
+// запоминаем тот, на который чат ответил не 500. '' — без заголовка.
+export const CHAT_AUTH_TYPES = [
+  ...new Set(
+    (process.env.KASPI_CHAT_AUTH_TYPES ?? ',MERCHANT,MC,SHOP,TOKEN,COOKIE,JWT,BEARER').split(',').map((t) => t.trim()),
+  ),
+];
+let authTypeIdx = -1; // -1 — ещё не подобран
+
+const chatHeaders = (authType) => ({
+  'X-App-ID': CHAT_APP_ID,
+  'X-Platform-Type': 'WEB',
+  ...(authType ? { 'X-Auth-Type': authType } : {}),
+});
 
 const parseTemplate = (raw, fallback) => {
   if (!raw) return fallback;
@@ -142,7 +161,7 @@ const short = (data) => {
   return (s || '').replace(/\s+/g, ' ').slice(0, 300);
 };
 
-const chatCall = async (jar, path, body) => {
+const chatCall = async (jar, path, body, authType = CHAT_AUTH_TYPES[Math.max(authTypeIdx, 0)]) => {
   const url = `${CHAT_API_URL}${path}`;
   let resp;
   try {
@@ -158,6 +177,7 @@ const chatCall = async (jar, path, body) => {
         ...(jar && Object.keys(jar).length ? { Cookie: cookieHeader(jar) } : {}),
         // Виджет берёт токен из cookie t_token — отдаём его и заголовком
         ...(jar?.t_token ? { Authorization: `Bearer ${jar.t_token}` } : {}),
+        ...chatHeaders(authType),
       },
       body: JSON.stringify(body),
       redirect: 'manual',
@@ -218,8 +238,23 @@ export const describeJar = (jar) => {
 export const findChat = async (jar, { orderCode, orderId, phone, merchantUid, types = CHAT_START_TYPES }) => {
   const vars = { order: String(orderCode || ''), phone: phone || '', merchantUid: merchantUid || '' };
   const trace = [{ step: 'сессия', status: 0, body: describeJar(jar) }];
-  const r = await chatCall(jar, CHAT_SEARCH_PATH, fillTemplate(SEARCH_BODY, vars));
+  const searchBody = fillTemplate(SEARCH_BODY, vars);
+  let r = await chatCall(jar, CHAT_SEARCH_PATH, searchBody);
   trace.push({ step: 'поиск', status: r.status, body: short(r.data) });
+  // 500 на поиске — сервис не принял запрос: подбираем X-Auth-Type
+  if (r.status >= 500) {
+    const cur = Math.max(authTypeIdx, 0);
+    for (let i = 0; i < CHAT_AUTH_TYPES.length; i += 1) {
+      if (i === cur) continue;
+      const a = await chatCall(r.jar, CHAT_SEARCH_PATH, searchBody, CHAT_AUTH_TYPES[i]);
+      trace.push({ step: `поиск (X-Auth-Type: ${CHAT_AUTH_TYPES[i]})`, status: a.status, body: short(a.data) });
+      if (a.status < 500) {
+        authTypeIdx = i;
+        r = a;
+        break;
+      }
+    }
+  } else if (authTypeIdx < 0) authTypeIdx = 0;
   checkAuth(r, trace);
   let chatId = r.ok ? pickChatId(r.data, orderCode) : null;
   let curJar = r.jar;
@@ -261,7 +296,7 @@ export const sendChatMessage = async (
     const last = tried[tried.length - 1];
     const codes = tried.map((t) => `${t.step.replace('начать чат ', '')} → ${t.status}`).join('; ');
     const why = last ? ` Попытки открыть: ${codes}. Последний ответ: ${short(last.body).slice(0, 140)}` : '';
-    const search = trace.find((t) => t.step === 'поиск');
+    const search = [...trace].reverse().find((t) => t.step.startsWith('поиск'));
     const hint =
       search && search.status >= 500
         ? ' Сервер чата Kaspi отвечает ошибкой даже на поиск — он не принимает сессию, дело не в заказе.'
