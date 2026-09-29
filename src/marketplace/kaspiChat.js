@@ -37,24 +37,6 @@ export const CHAT_START_TYPES = (process.env.KASPI_CHAT_START_TYPES || 'CLIENT_S
   .split(',')
   .map((t) => t.trim())
   .filter(Boolean);
-// Для проверки (ничего не отправляет) — перебираем больше вариантов типа,
-// чтобы увидеть, какой Kaspi принимает
-export const PROBE_START_TYPES = [
-  ...new Set([
-    ...CHAT_START_TYPES,
-    'CLIENT_SELLER_BY_ORDER',
-    'ORDER',
-    'order',
-    'MERCHANT_ORDER',
-    'ORDER_CHAT',
-    'SHOP_ORDER',
-    'KASPI_ORDER',
-    'MERCHANT',
-    'merchant',
-    'PRODUCT',
-    'CLIENT',
-  ]),
-];
 
 // Заголовки виджета для сервиса чата — точно как в его коде:
 //   W4: {"X-App-ID": appId, "X-Platform-Type": "WEB", "X-Auth-Type": "Webchat"}
@@ -312,7 +294,11 @@ export const describeJar = (jar) => {
 };
 
 // Найти чат заказа, а если его ещё нет — начать (startChat)
-export const findChat = async (jar, { orderCode, orderId, phone, merchantUid, types = CHAT_START_TYPES }) => {
+// open=false — только поиск: проверка не должна открывать покупателю пустой чат
+export const findChat = async (
+  jar,
+  { orderCode, orderId, phone, merchantUid, types = CHAT_START_TYPES, open = true },
+) => {
   const vars = { order: String(orderCode || ''), phone: phone || '', merchantUid: merchantUid || '' };
   const trace = [{ step: 'сессия', status: 0, body: describeJar(jar) }];
   const withToken = await ensureChatToken(jar, trace);
@@ -323,7 +309,7 @@ export const findChat = async (jar, { orderCode, orderId, phone, merchantUid, ty
   checkAuth(r, trace);
   let chatId = r.ok ? pickChatId(r.data, orderCode) : null;
   let curJar = r.jar;
-  if (!chatId) {
+  if (!chatId && open) {
     const refs = [...new Set([String(orderCode || ''), String(orderId || '')].filter(Boolean))];
     outer: for (const chatRef of refs) {
       for (const type of types) {
@@ -339,7 +325,7 @@ export const findChat = async (jar, { orderCode, orderId, phone, merchantUid, ty
       }
     }
   }
-  return { chatId, jar: curJar, trace, merchantId: mid };
+  return { chatId, jar: curJar, trace, merchantId: mid, searchOk: r.ok };
 };
 
 // Отправить сообщение покупателю по заказу. dryRun — только найти чат.
@@ -353,8 +339,13 @@ export const sendChatMessage = async (
   if (!dryRun && !msg) throw new ChatError(400, 'Пустой текст сообщения.');
   if (msg.length > MAX_CHAT_TEXT) throw new ChatError(400, `Сообщение длиннее ${MAX_CHAT_TEXT} символов.`);
 
-  const found = await findChat(jar, { orderCode: code, orderId, phone, merchantUid, types });
+  const found = await findChat(jar, { orderCode: code, orderId, phone, merchantUid, types, open: !dryRun });
   const { trace } = found;
+  // Проверка: чат доступен (поиск прошёл), но по заказу его ещё нет — это не
+  // ошибка, он откроется при первой отправке
+  if (dryRun && !found.chatId && found.searchOk) {
+    return { ok: true, sent: false, chatId: null, reachable: true, jar: found.jar, trace };
+  }
   if (!found.chatId) {
     // Ответ Kaspi на попытку открыть чат — сразу в тексте ошибки (журнал, тост)
     const tried = trace.filter((t) => t.step.startsWith('начать чат'));
@@ -372,7 +363,7 @@ export const sendChatMessage = async (
         : '';
     throw new ChatError(404, `Чат по заказу №${code} не найден и не открылся в кабинете Kaspi.${hint}${why}`, trace);
   }
-  if (dryRun) return { ok: true, sent: false, chatId: found.chatId, jar: found.jar, trace };
+  if (dryRun) return { ok: true, sent: false, chatId: found.chatId, reachable: true, jar: found.jar, trace };
 
   const vars = {
     order: code,

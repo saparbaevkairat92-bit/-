@@ -938,10 +938,14 @@ const probeChat = () =>
     }
     const trace = (r.trace || []).map((t) => `${esc(t.step)}: HTTP ${esc(t.status)} — ${esc(t.body)}`).join('<br>');
     $('probeOut').innerHTML = note(
-      `${r.found ? `<b>Чат найден</b> (${esc(r.chatId)})` : `<b>Чат не найден.</b> ${esc(r.error || '')}`}${
-        trace ? `<div style="font-family:monospace;font-size:11px;margin-top:6px">${trace}</div>` : ''
-      }`,
-      r.found ? 'ok' : 'err',
+      `${
+        r.found
+          ? `<b>Чат найден</b> (${esc(r.chatId)})`
+          : r.reachable
+            ? '<b>Чат Kaspi доступен.</b> По этому заказу чата ещё нет — он откроется при первой отправке.'
+            : `<b>Чат не найден.</b> ${esc(r.error || '')}`
+      }${trace ? `<div style="font-family:monospace;font-size:11px;margin-top:6px">${trace}</div>` : ''}`,
+      r.found || r.reachable ? 'ok' : 'err',
     );
   });
 
