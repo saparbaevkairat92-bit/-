@@ -211,6 +211,70 @@ export const startPhoneLogin = async (rawPhone) => {
   return { codeSent: true, phone, pending: { jar, phone, at: Date.now() } };
 };
 
+// Вход по e-mail и паролю (как веб-форма kaspi.kz/mc). Та же OAuth-цепочка, что
+// и у входа по телефону, но в idmc уходят логин и пароль (_u/_p). Если Kaspi
+// включил двухфакторную защиту — просит код, и дальше тот же confirmCode.
+export const startPasswordLogin = async (rawEmail, password) => {
+  const email = String(rawEmail || '')
+    .trim()
+    .toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new CabinetError(400, 'Введите e-mail кабинета продавца');
+  if (!password) throw new CabinetError(400, 'Введите пароль кабинета продавца');
+
+  let jar = (await walkRedirects(kickoffUrl(), {})).jar;
+  const r = await call(jar, 'POST', CABINET_LOGIN_URL, { headers: idmcHeaders(), json: { _u: email, _p: password } });
+  jar = r.jar;
+  const diag = [diagnose('e-mail и пароль', r.status, r.data)];
+  console.log('[cabinet] пароль:', JSON.stringify(diag));
+
+  if (looksBlocked(r.status, r.data)) {
+    throw new CabinetError(
+      502,
+      `Kaspi не пустил запрос с этого сервера (HTTP ${r.status}). Сервер должен работать с обычного IP, не из облака.`,
+      { diag },
+    );
+  }
+  // Двухфакторная защита: пароль принят, ждут код (SMS или письмо)
+  const mfa = mfaChallenge(r.data);
+  if (mfa) {
+    const flood = mfa.code === 'MFA_SEND_FLOOD';
+    return {
+      needCode: true,
+      message: flood
+        ? `Kaspi временно ограничил отправку кода${mfa.waitSeconds ? ` (подождите ${mfa.waitSeconds} сек)` : ''}. Введите код, который уже приходил.`
+        : 'Kaspi отправил код подтверждения — введите его.',
+      pending: { jar, login: email, at: Date.now() },
+    };
+  }
+  if (!r.ok) {
+    throw new CabinetError(
+      r.status === 400 || r.status === 401 || r.status === 403 ? 401 : 502,
+      errorFromBody(r.data, 'Kaspi не принял e-mail или пароль') +
+        (r.data?.errorCode === 'CREDENTIALS_INVALID'
+          ? '. Проверьте, что с ними открывается kaspi.kz/mc. Не повторяйте много раз подряд — Kaspi может временно закрыть вход.'
+          : ''),
+      { diag },
+    );
+  }
+
+  // Пароль принят — обмениваем авторизацию на рабочие cookie кабинета
+  jar = (await walkRedirects(kickoffUrl(), jar)).jar;
+  try {
+    const { merchants, jar: finalJar } = await getMerchants(jar);
+    return { jar: finalJar, merchants };
+  } catch (err) {
+    if (err instanceof CabinetError && err.status === 401) {
+      // Кабинет ещё закрыт — Kaspi ждёт код подтверждения
+      return {
+        needCode: true,
+        message: 'Kaspi отправил код подтверждения — введите его.',
+        pending: { jar, login: email, at: Date.now() },
+      };
+    }
+    throw err;
+  }
+};
+
 // Шаг 2: код из SMS → рабочая сессия кабинета.
 export const confirmCode = async (pending, rawCode) => {
   const code = String(rawCode || '').replace(/\D/g, '');
