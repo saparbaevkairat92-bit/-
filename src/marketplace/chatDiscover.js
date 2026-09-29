@@ -271,7 +271,15 @@ export const findTokenSources = (texts) => {
   const out = [];
   const paths = new Set();
   for (const text of texts) {
-    for (const re of [/t_token/g, /initChat\(/g, /webchat\.init\(/g, /chatToken|tokenForChat|getChatToken/gi])
+    for (const re of [
+      /t_token/g,
+      /tToken/g,
+      /token\/refresh/g,
+      /setMerchantEvent|merchantContext/g,
+      /initChat\(/g,
+      /webchat\.init\(/g,
+      /chatToken|tokenForChat|getChatToken/gi,
+    ])
       for (const m of findAll(text, re, 4)) out.push(around(text, m.index, 400, 500));
     for (const m of findAll(text, /["'`]((?:https?:\/\/[^"'`\s]+)?\/[^"'`\s]*token[^"'`\s]*)["'`]/gi, 20))
       paths.add(m[1]);
