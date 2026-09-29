@@ -112,6 +112,14 @@ describe('kaspiChat', () => {
     assert.equal(send.groupId, 'g-new');
   });
 
+  it('проверка перебирает больше типов чата', async () => {
+    mode = 'nochat';
+    seen.length = 0;
+    await assert.rejects(chat.sendChatMessage({}, { orderCode: '5', dryRun: true, types: chat.PROBE_START_TYPES }));
+    const types = seen.filter((s) => s.path.endsWith('/startChat')).map((s) => JSON.parse(s.body).type);
+    assert.ok(types.includes('MERCHANT_ORDER') && types.length === chat.PROBE_START_TYPES.length);
+  });
+
   it('dry run only searches', async () => {
     mode = 'ok';
     seen.length = 0;
@@ -125,7 +133,7 @@ describe('kaspiChat', () => {
     mode = 'nochat';
     await assert.rejects(
       chat.sendChatMessage({}, { orderCode: '1', text: 't' }),
-      (e) => e.status === 404 && /Kaspi ответил на начать чат \(\w+, 1\): HTTP 404/.test(e.message),
+      (e) => e.status === 404 && /Попытки открыть: \(ORDER, 1\) → 404; \(order, 1\) → 404\./.test(e.message),
     );
     mode = 'reject';
     await assert.rejects(chat.sendChatMessage({}, { orderCode: '777', text: 't' }), /не принял/);
@@ -156,7 +164,9 @@ describe('разбор API виджета чата', () => {
       'const w={createChatById:(e,t,a)=>Ya().createChatById(e,t,a)};' +
       'function onChat(o){window.webchat.createChatById(o.code,"MERCHANT_ORDER",location.href)}' +
       'function alt(o){window.openWebchatById(o.id)}';
-    const calls = traceChatApi([code]).createCalls.join('\n');
+    const r = traceChatApi([code + 'if(g.type==="ORDER_CHAT")x();const q={type:"MERCHANT"};']);
+    assert.deepEqual(r.typeLiterals, ['ORDER_CHAT', 'MERCHANT', 'MERCHANT_ORDER']);
+    const calls = r.createCalls.join('\n');
     assert.match(calls, /MERCHANT_ORDER/);
     assert.match(calls, /openWebchatById\(o\.id\)/);
   });
