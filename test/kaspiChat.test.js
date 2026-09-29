@@ -140,12 +140,13 @@ describe('kaspiChat', () => {
     assert.equal(send.groupId, 'g-new');
   });
 
-  it('проверка перебирает больше типов чата', async () => {
+  it('проверка только ищет: чата нет — не открывает его, но сообщает, что чат доступен', async () => {
     mode = 'nochat';
     seen.length = 0;
-    await assert.rejects(chat.sendChatMessage({}, { orderCode: '5', dryRun: true, types: chat.PROBE_START_TYPES }));
-    const types = seen.filter((s) => s.path.endsWith('/startChat')).map((s) => JSON.parse(s.body).type);
-    assert.ok(types.includes('MERCHANT_ORDER') && types.length === chat.PROBE_START_TYPES.length);
+    const r = await chat.sendChatMessage({}, { orderCode: '5', dryRun: true });
+    assert.equal(r.chatId, null);
+    assert.equal(r.reachable, true);
+    assert.ok(!seen.some((s) => s.path.endsWith('/startChat')), 'покупателю пустой чат не открываем');
   });
 
   it('describeJar показывает имена cookie и срок t_token без значений', () => {
