@@ -10,11 +10,21 @@ const fakeChat = (req, res) => {
   let body = '';
   req.on('data', (c) => (body += c));
   req.on('end', () => {
-    seen.push({ path: req.url, body, cookie: req.headers.cookie || '', auth: req.headers.authorization || '' });
+    seen.push({
+      path: req.url,
+      body,
+      headers: req.headers,
+      cookie: req.headers.cookie || '',
+      auth: req.headers.authorization || '',
+    });
     res.setHeader('Content-Type', 'application/json');
     if (mode === 'expired') {
       res.statusCode = 401;
       return res.end('{}');
+    }
+    if (mode === 'authtype' && req.headers['x-auth-type'] !== 'MC') {
+      res.statusCode = 500;
+      return res.end(JSON.stringify({ error: { type: 'SYSTEM' }, StatusCode: -999 }));
     }
     if (req.url.endsWith('/api/v1/chat/search')) {
       res.setHeader('Set-Cookie', 'mc-sid=fresh; Path=/');
@@ -33,7 +43,7 @@ const fakeChat = (req, res) => {
     if (req.url.endsWith('/api/v1/group/startChat') && mode === 'start') {
       const b = JSON.parse(body);
       // Как у кабинета: открывает чат по заказу и отдаёт его id в data
-      if (b.type === 'ORDER' && b.id === '888')
+      if (b.type === 'CLIENT_SELLER_BY_ORDER' && b.id === '888')
         return res.end(JSON.stringify({ data: { id: 'g-new', title: 'Заказ' } }));
       res.statusCode = 400;
       return res.end(JSON.stringify({ error: { title: 'bad type' } }));
@@ -90,6 +100,8 @@ describe('kaspiChat', () => {
     assert.equal(r.chatId, 'g-777');
     assert.equal(r.jar['mc-sid'], 'fresh', 'cabinet cookies refreshed');
     const send = seen.find((s) => s.path.endsWith('/sendMessage'));
+    assert.equal(send.headers['x-platform-type'], 'WEB');
+    assert.match(send.headers['x-app-id'], /^[0-9a-f-]{36}$/);
     // Тело — ровно как у виджета кабинета
     const b = JSON.parse(send.body);
     assert.deepEqual(b.data, { text: 'Спасибо!' });
@@ -107,7 +119,7 @@ describe('kaspiChat', () => {
     const r = await chat.sendChatMessage({}, { orderCode: '888', orderId: 'b64id', text: 'Привет' });
     assert.equal(r.chatId, 'g-new');
     const start = seen.filter((s) => s.path.endsWith('/startChat')).map((s) => JSON.parse(s.body));
-    assert.deepEqual(start[0], { id: '888', type: 'ORDER' });
+    assert.deepEqual(start[0], { id: '888', type: 'CLIENT_SELLER_BY_ORDER' });
     const send = JSON.parse(seen.find((s) => s.path.endsWith('/sendMessage')).body);
     assert.equal(send.groupId, 'g-new');
   });
@@ -128,6 +140,19 @@ describe('kaspiChat', () => {
     assert.match(chat.describeJar({}), /t_token нет/);
   });
 
+  it('500 на поиске — подбирает X-Auth-Type и запоминает его', async () => {
+    mode = 'authtype';
+    seen.length = 0;
+    const r = await chat.sendChatMessage({}, { orderCode: '777', text: 'x' });
+    assert.equal(r.sent, true);
+    assert.ok(r.trace.some((t) => t.step === 'поиск (X-Auth-Type: MC)' && t.status === 200));
+    assert.equal(seen.find((s) => s.path.endsWith('/sendMessage')).headers['x-auth-type'], 'MC');
+    seen.length = 0;
+    await chat.sendChatMessage({}, { orderCode: '777', text: 'x' });
+    assert.equal(seen.length, 2, 'второй раз — сразу с найденным заголовком');
+    mode = 'ok';
+  });
+
   it('dry run only searches', async () => {
     mode = 'ok';
     seen.length = 0;
@@ -141,7 +166,7 @@ describe('kaspiChat', () => {
     mode = 'nochat';
     await assert.rejects(
       chat.sendChatMessage({}, { orderCode: '1', text: 't' }),
-      (e) => e.status === 404 && /Попытки открыть: \(ORDER, 1\) → 404; \(order, 1\) → 404\./.test(e.message),
+      (e) => e.status === 404 && /Попытки открыть: \(CLIENT_SELLER_BY_ORDER, 1\) → 404\./.test(e.message),
     );
     mode = 'reject';
     await assert.rejects(chat.sendChatMessage({}, { orderCode: '777', text: 't' }), /не принял/);
@@ -172,7 +197,14 @@ describe('разбор API виджета чата', () => {
       'const w={createChatById:(e,t,a)=>Ya().createChatById(e,t,a)};' +
       'function onChat(o){window.webchat.createChatById(o.code,"MERCHANT_ORDER",location.href)}' +
       'function alt(o){window.openWebchatById(o.id)}';
-    const r = traceChatApi([code + 'if(g.type==="ORDER_CHAT")x();const q={type:"MERCHANT"};']);
+    const r = traceChatApi([
+      code +
+        'if(g.type==="ORDER_CHAT")x();const q={type:"MERCHANT"};' +
+        'aw="MC_TOKEN",K4={chat:{"X-App-ID":zi,"X-Auth-Type":aw}};Zt.interceptors.request.use(W4);function W4(e){return e}',
+    ]);
+    const setup = r.requestSetup.join('\n');
+    assert.match(setup, /aw: .*MC_TOKEN/);
+    assert.match(setup, /W4: function W4/);
     assert.deepEqual(r.typeLiterals, ['ORDER_CHAT', 'MERCHANT', 'MERCHANT_ORDER']);
     const calls = r.createCalls.join('\n');
     assert.match(calls, /MERCHANT_ORDER/);

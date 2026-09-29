@@ -234,7 +234,21 @@ export const traceChatApi = (texts) => {
     for (const re of [/interceptors\.request\.use\(/g, /baseURL:/g, /["']token["'],\(\)=>/g, /Authorization/g])
       for (const m of findAll(text, re, 4)) result.requestSetup.push(around(text, m.index, 300, 700));
   }
-  result.requestSetup = [...new Set(result.requestSetup)].slice(0, 16);
+  // Заголовки сервиса чата ("X-Auth-Type":aw и т.п.) и перехватчики запроса:
+  // находим определения переменных и функций, чтобы увидеть точные значения
+  const heads = [];
+  for (const text of texts) {
+    const names = new Set();
+    for (const m of findAll(text, /"X-[\w-]+":([A-Za-z_$][\w$]*)/g, 20)) names.add(m[1]);
+    for (const m of findAll(text, /interceptors\.request\.use\(([A-Za-z_$][\w$.]*)\)/g, 10))
+      names.add(m[1].split('.')[0]);
+    for (const m of findAll(text, /X-Auth-Type/g, 3)) heads.push(around(text, m.index, 200, 900));
+    for (const n of names) {
+      const def = new RegExp(`(?:function\\s+${reEsc(n)}\\(|[,;{\\s]${reEsc(n)}=)`, 'g');
+      for (const m of findAll(text, def, 2)) heads.push(`${n}: ${around(text, m.index, 0, 600)}`);
+    }
+  }
+  result.requestSetup = [...new Set([...heads, ...result.requestSetup])].slice(0, 16);
   // Значения типа чата, что встречаются в коде виджета: type:"X", type==="X"
   // и константы с ORDER — среди них тот, что ждёт startChat
   const types = new Set();
