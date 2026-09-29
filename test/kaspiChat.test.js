@@ -4,6 +4,8 @@ import http from 'node:http';
 
 // Поддельный чат Kaspi: поиск по номеру заказа и отправка
 let fake;
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+const JWT = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ merchantId: 'M1', exp: 4102444800 })}.signaturepart`;
 let mode = 'ok';
 const seen = [];
 const fakeChat = (req, res) => {
@@ -22,7 +24,19 @@ const fakeChat = (req, res) => {
       res.statusCode = 401;
       return res.end('{}');
     }
-    if (mode === 'authtype' && req.headers['x-auth-type'] !== 'MC') {
+    if (req.url.endsWith('/crm/token/refresh')) {
+      if (mode !== 'token') {
+        res.statusCode = 404;
+        return res.end('{}');
+      }
+      return res.end(JSON.stringify({ data: { merchantId: 'M1', tToken: JWT } }));
+    }
+    if (
+      mode === 'token' &&
+      (!(req.headers.cookie || '').includes(`t_token=${JWT}`) ||
+        req.headers['x-auth-type'] !== 'Webchat' ||
+        req.headers['x-merchant-id'] !== 'M1')
+    ) {
       res.statusCode = 500;
       return res.end(JSON.stringify({ error: { type: 'SYSTEM' }, StatusCode: -999 }));
     }
@@ -65,6 +79,7 @@ describe('kaspiChat', () => {
     fake = http.createServer(fakeChat);
     await new Promise((r) => fake.listen(0, '127.0.0.1', r));
     process.env.KASPI_CHAT_API_URL = `http://127.0.0.1:${fake.address().port}`;
+    process.env.KASPI_CHAT_TOKEN_URLS = `POST http://127.0.0.1:${fake.address().port}/crm/token/refresh`;
     chat = await import('../src/marketplace/kaspiChat.js');
   });
 
@@ -101,7 +116,8 @@ describe('kaspiChat', () => {
     assert.equal(r.jar['mc-sid'], 'fresh', 'cabinet cookies refreshed');
     const send = seen.find((s) => s.path.endsWith('/sendMessage'));
     assert.equal(send.headers['x-platform-type'], 'WEB');
-    assert.match(send.headers['x-app-id'], /^[0-9a-f-]{36}$/);
+    assert.match(send.headers['x-app-id'], /^[0-9A-F-]{36}$/);
+    assert.equal(send.headers.referer, 'https://kaspi.kz/');
     // Тело — ровно как у виджета кабинета
     const b = JSON.parse(send.body);
     assert.deepEqual(b.data, { text: 'Спасибо!' });
@@ -110,7 +126,7 @@ describe('kaspiChat', () => {
     assert.ok(Math.abs(b.created - Date.now()) < 60000);
     assert.equal(b.transitionContextUrl, 'https://pay.kaspi.kz/chat?threadId=g-777&isWeb=true');
     assert.match(send.cookie, /mc-session=s1/);
-    assert.equal(send.auth, 'Bearer tt');
+    assert.equal(send.headers['x-auth-type'], 'Webchat');
   });
 
   it('чата нет — открывает его по заказу (startChat) и пишет туда', async () => {
@@ -140,17 +156,26 @@ describe('kaspiChat', () => {
     assert.match(chat.describeJar({}), /t_token нет/);
   });
 
-  it('500 на поиске — подбирает X-Auth-Type и запоминает его', async () => {
-    mode = 'authtype';
+  it('без t_token — получает токен чата и ходит с заголовками виджета', async () => {
+    mode = 'token';
     seen.length = 0;
-    const r = await chat.sendChatMessage({}, { orderCode: '777', text: 'x' });
+    const r = await chat.sendChatMessage({ 'mc-session': 's' }, { orderCode: '777', text: 'x' });
     assert.equal(r.sent, true);
-    assert.ok(r.trace.some((t) => t.step === 'поиск (X-Auth-Type: MC)' && t.status === 200));
-    assert.equal(seen.find((s) => s.path.endsWith('/sendMessage')).headers['x-auth-type'], 'MC');
+    assert.equal(r.jar.t_token, JWT, 'токен сохранён в сессии');
+    assert.ok(r.trace.some((t) => t.step.startsWith('токен чата') && t.body.startsWith('токен получен')));
+    const send = seen.find((s) => s.path.endsWith('/sendMessage'));
+    assert.equal(send.headers['x-locale'], 'ru-RU');
+    assert.equal(send.auth, '', 'без Authorization — как виджет');
+    // Второй раз токен уже есть — за ним не ходим
     seen.length = 0;
-    await chat.sendChatMessage({}, { orderCode: '777', text: 'x' });
-    assert.equal(seen.length, 2, 'второй раз — сразу с найденным заголовком');
+    await chat.sendChatMessage(r.jar, { orderCode: '777', text: 'x' });
+    assert.ok(!seen.some((s) => s.path.endsWith('/crm/token/refresh')));
     mode = 'ok';
+  });
+
+  it('findJwt находит токен в ответе на любой глубине', () => {
+    assert.equal(chat.findJwt({ a: { b: { tToken: JWT } } }), JWT);
+    assert.equal(chat.findJwt({ token: 'not-a-jwt' }), null);
   });
 
   it('dry run only searches', async () => {

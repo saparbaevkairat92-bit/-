@@ -56,23 +56,102 @@ export const PROBE_START_TYPES = [
   ]),
 ];
 
-// Заголовки виджета для сервиса чата (из кода: {"X-App-ID", "X-Platform-Type":
-// "WEB", "X-Auth-Type"}). X-App-ID — постоянный id «браузера».
-export const CHAT_APP_ID = process.env.KASPI_CHAT_APP_ID || crypto.randomUUID();
-// Значение X-Auth-Type пока неизвестно точно: пробуем варианты на поиске и
-// запоминаем тот, на который чат ответил не 500. '' — без заголовка.
-export const CHAT_AUTH_TYPES = [
-  ...new Set(
-    (process.env.KASPI_CHAT_AUTH_TYPES ?? ',MERCHANT,MC,SHOP,TOKEN,COOKIE,JWT,BEARER').split(',').map((t) => t.trim()),
-  ),
-];
-let authTypeIdx = -1; // -1 — ещё не подобран
+// Заголовки виджета для сервиса чата — точно как в его коде:
+//   W4: {"X-App-ID": appId, "X-Platform-Type": "WEB", "X-Auth-Type": "Webchat"}
+//   q4: "X-Locale": "ru-RU";  Y4: "X-Merchant-ID": merchantId
+// Авторизация — cookie сессии кабинета (mc-session, mc-sid), заголовка
+// Authorization нет. Проверено по живому запросу браузера (web/segments → 200).
+export const CHAT_APP_ID = process.env.KASPI_CHAT_APP_ID || crypto.randomUUID().toUpperCase();
+export const CHAT_AUTH_TYPE = process.env.KASPI_CHAT_AUTH_TYPE || 'Webchat';
 
-const chatHeaders = (authType) => ({
+const chatHeaders = (merchantId) => ({
   'X-App-ID': CHAT_APP_ID,
   'X-Platform-Type': 'WEB',
-  ...(authType ? { 'X-Auth-Type': authType } : {}),
+  'X-Auth-Type': CHAT_AUTH_TYPE,
+  'X-Locale': 'ru-RU',
+  ...(merchantId ? { 'X-Merchant-ID': String(merchantId) } : {}),
 });
+
+// t_token для чата не нужен (браузер ходит без него) — по умолчанию не
+// запрашиваем; можно включить: KASPI_CHAT_TOKEN_URLS="GET https://…"
+export const CHAT_TOKEN_URLS = (process.env.KASPI_CHAT_TOKEN_URLS || '')
+  .split(',')
+  .map((x) => x.trim().split(/\s+/))
+  .filter((x) => x.length === 2)
+  .map(([method, url]) => ({ method: method.toUpperCase(), url }));
+
+const JWT_RE = /^[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,}$/;
+
+export const jwtPayload = (tok) => {
+  try {
+    return JSON.parse(Buffer.from(String(tok).split('.')[1], 'base64url').toString());
+  } catch {
+    return null;
+  }
+};
+
+const tokenValid = (tok) => {
+  const p = tok && jwtPayload(tok);
+  return !!p && (!p.exp || p.exp * 1000 > Date.now() + 60_000);
+};
+
+// Найти JWT в ответе: поля tToken / t_token / token / accessToken на любой глубине
+export const findJwt = (data, depth = 0) => {
+  if (!data || typeof data !== 'object' || depth > 5) return null;
+  for (const [k, v] of Object.entries(data)) {
+    if (typeof v === 'string' && /^(t_?token|token|access_?token|chat_?token)$/i.test(k) && JWT_RE.test(v)) return v;
+  }
+  for (const v of Object.values(data)) {
+    const t = findJwt(v, depth + 1);
+    if (t) return t;
+  }
+  return null;
+};
+
+const ensureChatToken = async (jar, trace) => {
+  if (!CHAT_TOKEN_URLS.length || tokenValid(jar?.t_token)) return jar;
+  let cur = jar || {};
+  for (const { method, url } of CHAT_TOKEN_URLS) {
+    let resp;
+    try {
+      resp = await fetch(url, {
+        method,
+        headers: {
+          'User-Agent': BROWSER_UA,
+          Accept: 'application/json, text/plain, */*',
+          'Accept-Language': 'ru-RU,ru;q=0.9',
+          Origin: 'https://kaspi.kz',
+          Referer: 'https://kaspi.kz/mc/',
+          ...(Object.keys(cur).length ? { Cookie: cookieHeader(cur) } : {}),
+          ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
+        },
+        ...(method === 'POST' ? { body: '{}' } : {}),
+        redirect: 'manual',
+      });
+    } catch (err) {
+      trace.push({ step: `токен чата: ${method} ${url}`, status: 0, body: err.message });
+      continue;
+    }
+    const set = parseSetCookies(setCookiesFromResponse(resp));
+    cur = mergeCookies(cur, set);
+    const text = await resp.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      /* не JSON */
+    }
+    const tok = tokenValid(cur.t_token) ? cur.t_token : findJwt(data);
+    const keys = data && typeof data === 'object' ? Object.keys(data).slice(0, 12).join(',') : '';
+    trace.push({
+      step: `токен чата: ${method} ${url}`,
+      status: resp.status,
+      body: `${tok ? 'токен получен' : 'токена нет'}; cookie: ${Object.keys(set).join(',') || '—'}; поля: ${keys || '—'}`,
+    });
+    if (tok) return { ...cur, t_token: tok };
+  }
+  return cur;
+};
 
 const parseTemplate = (raw, fallback) => {
   if (!raw) return fallback;
@@ -161,7 +240,7 @@ const short = (data) => {
   return (s || '').replace(/\s+/g, ' ').slice(0, 300);
 };
 
-const chatCall = async (jar, path, body, authType = CHAT_AUTH_TYPES[Math.max(authTypeIdx, 0)]) => {
+const chatCall = async (jar, path, body, merchantId) => {
   const url = `${CHAT_API_URL}${path}`;
   let resp;
   try {
@@ -173,11 +252,9 @@ const chatCall = async (jar, path, body, authType = CHAT_AUTH_TYPES[Math.max(aut
         'Accept-Language': 'ru-RU,ru;q=0.9',
         'Content-Type': 'application/json',
         Origin: 'https://kaspi.kz',
-        Referer: 'https://kaspi.kz/mc/',
+        Referer: 'https://kaspi.kz/',
         ...(jar && Object.keys(jar).length ? { Cookie: cookieHeader(jar) } : {}),
-        // Виджет берёт токен из cookie t_token — отдаём его и заголовком
-        ...(jar?.t_token ? { Authorization: `Bearer ${jar.t_token}` } : {}),
-        ...chatHeaders(authType),
+        ...chatHeaders(merchantId),
       },
       body: JSON.stringify(body),
       redirect: 'manual',
@@ -238,23 +315,11 @@ export const describeJar = (jar) => {
 export const findChat = async (jar, { orderCode, orderId, phone, merchantUid, types = CHAT_START_TYPES }) => {
   const vars = { order: String(orderCode || ''), phone: phone || '', merchantUid: merchantUid || '' };
   const trace = [{ step: 'сессия', status: 0, body: describeJar(jar) }];
-  const searchBody = fillTemplate(SEARCH_BODY, vars);
-  let r = await chatCall(jar, CHAT_SEARCH_PATH, searchBody);
+  const withToken = await ensureChatToken(jar, trace);
+  const mid = merchantUid || jwtPayload(withToken.t_token)?.merchantId || '';
+  trace[0].body += `; магазин: ${mid || 'не известен'}`;
+  const r = await chatCall(withToken, CHAT_SEARCH_PATH, fillTemplate(SEARCH_BODY, vars), mid);
   trace.push({ step: 'поиск', status: r.status, body: short(r.data) });
-  // 500 на поиске — сервис не принял запрос: подбираем X-Auth-Type
-  if (r.status >= 500) {
-    const cur = Math.max(authTypeIdx, 0);
-    for (let i = 0; i < CHAT_AUTH_TYPES.length; i += 1) {
-      if (i === cur) continue;
-      const a = await chatCall(r.jar, CHAT_SEARCH_PATH, searchBody, CHAT_AUTH_TYPES[i]);
-      trace.push({ step: `поиск (X-Auth-Type: ${CHAT_AUTH_TYPES[i]})`, status: a.status, body: short(a.data) });
-      if (a.status < 500) {
-        authTypeIdx = i;
-        r = a;
-        break;
-      }
-    }
-  } else if (authTypeIdx < 0) authTypeIdx = 0;
   checkAuth(r, trace);
   let chatId = r.ok ? pickChatId(r.data, orderCode) : null;
   let curJar = r.jar;
@@ -262,7 +327,7 @@ export const findChat = async (jar, { orderCode, orderId, phone, merchantUid, ty
     const refs = [...new Set([String(orderCode || ''), String(orderId || '')].filter(Boolean))];
     outer: for (const chatRef of refs) {
       for (const type of types) {
-        const c = await chatCall(curJar, CHAT_START_PATH, fillTemplate(START_BODY, { ...vars, chatRef, type }));
+        const c = await chatCall(curJar, CHAT_START_PATH, fillTemplate(START_BODY, { ...vars, chatRef, type }), mid);
         trace.push({ step: `начать чат (${type}, ${chatRef})`, status: c.status, body: short(c.data) });
         checkAuth(c, trace);
         curJar = c.jar;
@@ -274,7 +339,7 @@ export const findChat = async (jar, { orderCode, orderId, phone, merchantUid, ty
       }
     }
   }
-  return { chatId, jar: curJar, trace };
+  return { chatId, jar: curJar, trace, merchantId: mid };
 };
 
 // Отправить сообщение покупателю по заказу. dryRun — только найти чат.
@@ -297,9 +362,13 @@ export const sendChatMessage = async (
     const codes = tried.map((t) => `${t.step.replace('начать чат ', '')} → ${t.status}`).join('; ');
     const why = last ? ` Попытки открыть: ${codes}. Последний ответ: ${short(last.body).slice(0, 140)}` : '';
     const search = [...trace].reverse().find((t) => t.step.startsWith('поиск'));
+    const gotToken = trace.some((t) => t.step.startsWith('токен чата') && t.body.startsWith('токен получен'));
+    const hadToken = !trace.some((t) => t.step.startsWith('токен чата'));
     const hint =
       search && search.status >= 500
-        ? ' Сервер чата Kaspi отвечает ошибкой даже на поиск — он не принимает сессию, дело не в заказе.'
+        ? gotToken || hadToken
+          ? ' Сервер чата Kaspi отвечает ошибкой даже на поиск — он не принимает сессию, дело не в заказе.'
+          : ' Не удалось получить токен чата Kaspi (t_token) — без него чат не пускает.'
         : '';
     throw new ChatError(404, `Чат по заказу №${code} не найден и не открылся в кабинете Kaspi.${hint}${why}`, trace);
   }
@@ -314,7 +383,7 @@ export const sendChatMessage = async (
     now: Date.now(),
     uuid: crypto.randomUUID(),
   };
-  const r = await chatCall(found.jar, CHAT_SEND_PATH, fillTemplate(SEND_BODY, vars));
+  const r = await chatCall(found.jar, CHAT_SEND_PATH, fillTemplate(SEND_BODY, vars), found.merchantId);
   trace.push({ step: 'отправка', status: r.status, body: short(r.data) });
   checkAuth(r, trace);
   // Бывает 200 с {data:{status:"rejected", alert}} — это тоже отказ
