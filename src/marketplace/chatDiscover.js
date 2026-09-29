@@ -8,7 +8,7 @@
 
 import fetch from 'node-fetch';
 import { CABINET_URL, CABINET_HOME_URL, BROWSER_UA } from './config.js';
-import { cookieHeader } from './cookies.js';
+import { cookieHeader, parseSetCookies, setCookiesFromResponse } from './cookies.js';
 
 const MAX_SCRIPTS = 16;
 const MAX_CHUNKS = 12;
@@ -265,6 +265,20 @@ export const traceChatApi = (texts) => {
   return result;
 };
 
+// Откуда кабинет берёт t_token для чата: виджет читает его из cookie, а в
+// сессии после входа его нет. Ищем в коде кабинета, кто его ставит/получает.
+export const findTokenSources = (texts) => {
+  const out = [];
+  const paths = new Set();
+  for (const text of texts) {
+    for (const re of [/t_token/g, /initChat\(/g, /webchat\.init\(/g, /chatToken|tokenForChat|getChatToken/gi])
+      for (const m of findAll(text, re, 4)) out.push(around(text, m.index, 400, 500));
+    for (const m of findAll(text, /["'`]((?:https?:\/\/[^"'`\s]+)?\/[^"'`\s]*token[^"'`\s]*)["'`]/gi, 20))
+      paths.add(m[1]);
+  }
+  return { snippets: [...new Set(out)].slice(0, 20), paths: [...paths].slice(0, 40) };
+};
+
 export const discoverChat = async (jar) => {
   const scanned = [];
   const candidates = new Set();
@@ -275,7 +289,8 @@ export const discoverChat = async (jar) => {
     try {
       const r = await get(url, jar, accept);
       const text = (await r.text()).slice(0, MAX_JS_BYTES);
-      scanned.push({ url, status: r.status, bytes: text.length, text });
+      const setCookies = Object.keys(parseSetCookies(setCookiesFromResponse(r)));
+      scanned.push({ url, status: r.status, bytes: text.length, text, setCookies });
       extractCandidates(text, candidates);
       extractSnippets(text, snippets);
       return text;
@@ -379,6 +394,8 @@ export const discoverChat = async (jar) => {
     home: CABINET_HOME_URL,
     origin: CABINET_URL,
     scannedScripts: scanned.map(({ url, status, bytes }) => ({ url, status, bytes })),
+    // Какие адреса ставили cookie (имена) — ищем, кто выдаёт t_token
+    cookieSetters: scanned.filter((x) => x.setCookies?.length).map(({ url, setCookies }) => ({ url, setCookies })),
     sendTextSnippets: [...snippets], // куски кода вокруг sendText — главное
     // Разбор API виджета: адреса, где вызываются, как устроен клиент и токен
     chatApi: {
@@ -386,6 +403,9 @@ export const discoverChat = async (jar) => {
         scanned.filter((x) => x.text && /chats\/api\/mobile|sendMessage/.test(x.text)).map((x) => x.text),
       ),
       // Вызовы открытия чата — в коде самого кабинета (страница заказа)
+      tokenSources: findTokenSources(
+        scanned.filter((x) => x.text && !/chats\/api\/mobile/.test(x.text)).map((x) => x.text),
+      ),
       createCalls: traceChatApi(
         scanned.filter((x) => x.text && /createChat|openWebchat/.test(x.text)).map((x) => x.text),
       ).createCalls,

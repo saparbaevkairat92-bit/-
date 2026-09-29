@@ -211,3 +211,16 @@ describe('разбор API виджета чата', () => {
     assert.match(calls, /openWebchatById\(o\.id\)/);
   });
 });
+
+describe('откуда берётся t_token', () => {
+  it('находит место, где кабинет получает токен чата', async () => {
+    const { findTokenSources } = await import('../src/marketplace/chatDiscover.js');
+    const code =
+      'async function tk(){const r=await api.get("/mc/api/chat/token");document.cookie="t_token="+r.data.token}' +
+      'window.initChat({merchantId:m,token:t})';
+    const r = findTokenSources([code]);
+    assert.ok(r.paths.includes('/mc/api/chat/token'));
+    assert.ok(r.snippets.some((x) => x.includes('document.cookie="t_token="')));
+    assert.ok(r.snippets.some((x) => x.includes('initChat({merchantId')));
+  });
+});
