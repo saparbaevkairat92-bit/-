@@ -213,7 +213,14 @@ export const startPhoneLogin = async (rawPhone) => {
 
 // Вход по e-mail и паролю (как веб-форма kaspi.kz/mc). Та же OAuth-цепочка, что
 // и у входа по телефону, но в idmc уходят логин и пароль (_u/_p). Если Kaspi
-// включил двухфакторную защиту — просит код, и дальше тот же confirmCode.
+// включил двухфакторную защиту — просит код, и дальше confirmCode.
+//
+// Код после пароля уходит ВМЕСТЕ с логином и паролем: { _u, _p, _c }. Ответ
+// MFA_* на пароль — это ошибка, и idmc не запоминает вход (в отличие от шага
+// телефона, который отвечает 200 и запоминает номер в MS_AUTH_SSO). Голый
+// { _c } Kaspi в этом случае не с чем сверить — живой ответ 2026-10:
+// 401 {"errorCode":"FAILED"}. Поэтому пароль лежит в pending до шага кода —
+// только запечатанным (AES-GCM) и не дольше CODE_TTL_MS.
 export const startPasswordLogin = async (rawEmail, password) => {
   const email = String(rawEmail || '')
     .trim()
@@ -243,7 +250,7 @@ export const startPasswordLogin = async (rawEmail, password) => {
       message: flood
         ? `Kaspi временно ограничил отправку кода${mfa.waitSeconds ? ` (подождите ${mfa.waitSeconds} сек)` : ''}. Введите код, который уже приходил.`
         : 'Kaspi отправил код подтверждения — введите его.',
-      pending: { jar, login: email, at: Date.now() },
+      pending: { jar, login: email, password, mfa: mfa.code, at: Date.now() },
     };
   }
   if (!r.ok) {
@@ -268,6 +275,7 @@ export const startPasswordLogin = async (rawEmail, password) => {
       return {
         needCode: true,
         message: 'Kaspi отправил код подтверждения — введите его.',
+        // Пароль принят ответом 200 — idmc вход запомнил, код пойдёт один, как после телефона
         pending: { jar, login: email, at: Date.now() },
       };
     }
@@ -285,15 +293,27 @@ export const confirmCode = async (pending, rawCode) => {
   }
 
   let jar = pending.jar;
-  const r = await call(jar, 'POST', CABINET_LOGIN_URL, { headers: idmcHeaders(), json: { _c: code } });
+  // После пароля код идёт вместе с логином и паролем (см. startPasswordLogin),
+  // после телефона — один: номер Kaspi уже запомнил.
+  const byPassword = Boolean(pending.mfa && pending.login && pending.password);
+  const body = byPassword ? { _u: pending.login, _p: pending.password, _c: code } : { _c: code };
+  const r = await call(jar, 'POST', CABINET_LOGIN_URL, { headers: idmcHeaders(), json: body });
   jar = r.jar;
   const diag = [diagnose('код', r.status, r.data)];
   console.log('[cabinet] код:', JSON.stringify(diag));
 
   if (!r.ok) {
+    // Новый запрос кода после пароля: Kaspi снова ответил MFA_* — значит, код
+    // не подошёл, но вход ещё жив, можно ввести другой
+    const again = byPassword ? mfaChallenge(r.data) : null;
+    const generic = r.data && typeof r.data === 'object' && r.data.errorCode === 'FAILED';
     throw new CabinetError(
       r.status === 400 || r.status === 401 || r.status === 403 ? 401 : 502,
-      errorFromBody(r.data, 'Kaspi не принял код. Проверьте цифры или начните вход заново для нового кода.'),
+      again
+        ? 'Kaspi не принял код. Проверьте цифры — или начните вход заново, Kaspi пришлёт новый код.'
+        : generic
+          ? 'Kaspi не принял код (FAILED). Начните вход заново и введите новый код — старый после неудачной попытки уже не действует.'
+          : errorFromBody(r.data, 'Kaspi не принял код. Проверьте цифры или начните вход заново для нового кода.'),
       { diag, needCode: true, pending: { ...pending } },
     );
   }
