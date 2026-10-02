@@ -250,7 +250,9 @@ export const startPasswordLogin = async (rawEmail, password) => {
       message: flood
         ? `Kaspi временно ограничил отправку кода${mfa.waitSeconds ? ` (подождите ${mfa.waitSeconds} сек)` : ''}. Введите код, который уже приходил.`
         : 'Kaspi отправил код подтверждения — введите его.',
-      pending: { jar, login: email, password, mfa: mfa.code, at: Date.now() },
+      // mfaDiag — что Kaspi ответил на пароль (без секретов): в errorData может
+      // быть то, что нужно вернуть вместе с кодом; покажем при ошибке кода
+      pending: { jar, login: email, password, mfa: mfa.code, mfaDiag: diag[0], at: Date.now() },
     };
   }
   if (!r.ok) {
@@ -299,7 +301,7 @@ export const confirmCode = async (pending, rawCode) => {
   const body = byPassword ? { _u: pending.login, _p: pending.password, _c: code } : { _c: code };
   const r = await call(jar, 'POST', CABINET_LOGIN_URL, { headers: idmcHeaders(), json: body });
   jar = r.jar;
-  const diag = [diagnose('код', r.status, r.data)];
+  const diag = [...(pending.mfaDiag ? [pending.mfaDiag] : []), diagnose('код', r.status, r.data)];
   console.log('[cabinet] код:', JSON.stringify(diag));
 
   if (!r.ok) {

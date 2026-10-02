@@ -9,6 +9,7 @@ import * as smsStore from '../marketplace/autoSmsStore.js';
 import * as shopStore from '../marketplace/shopStore.js';
 import { runOnce as smsRunOnce, sendTest as smsSendTest } from '../marketplace/autoSmsPoller.js';
 import { discoverChat } from '../marketplace/chatDiscover.js';
+import { discoverLogin } from '../marketplace/loginDiscover.js';
 import { sendChatMessage, ChatError } from '../marketplace/kaspiChat.js';
 
 // ═══════════════════════════════════════════════════
@@ -119,6 +120,17 @@ router.post('/cabinet/confirm-code', async (req, res) => {
   }
   try {
     cabinetOk(res, req, await cabinet.confirmCode(pending, req.body?.code));
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+// Диагностика входа: как страница входа Kaspi шлёт код (только GET статики,
+// ни во что не входит). Нужна, чтобы починить вход по e-mail с кодом точно,
+// а не угадывать формат: Kaspi доступен только с сервера моста.
+router.get('/cabinet/discover-login', async (req, res) => {
+  try {
+    res.json(await discoverLogin());
   } catch (err) {
     fail(res, err);
   }
