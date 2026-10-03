@@ -211,16 +211,42 @@ export const startPhoneLogin = async (rawPhone) => {
   return { codeSent: true, phone, pending: { jar, phone, at: Date.now() } };
 };
 
-// Вход по e-mail и паролю (как веб-форма kaspi.kz/mc). Та же OAuth-цепочка, что
-// и у входа по телефону, но в idmc уходят логин и пароль (_u/_p). Если Kaspi
-// включил двухфакторную защиту — просит код, и дальше confirmCode.
-//
-// Код после пароля уходит ВМЕСТЕ с логином и паролем: { _u, _p, _c }. Ответ
-// MFA_* на пароль — это ошибка, и idmc не запоминает вход (в отличие от шага
-// телефона, который отвечает 200 и запоминает номер в MS_AUTH_SSO). Голый
-// { _c } Kaspi в этом случае не с чем сверить — живой ответ 2026-10:
-// 401 {"errorCode":"FAILED"}. Поэтому пароль лежит в pending до шага кода —
-// только запечатанным (AES-GCM) и не дольше CODE_TTL_MS.
+// Вход по e-mail и паролю — как веб-форма idmc.shop.kaspi.kz/login. Поток снят
+// с кода самой страницы входа (js/main.js, разбор через discover-login, 2026-10):
+//   1. POST /api/p/login { _u, _p, _r_d } — логин, пароль, «запомнить устройство».
+//   2. Ответ 200 бывает трёх видов:
+//      { redirectUrl }  — вход готов, дальше OAuth-обмен, как после телефона;
+//      { email }        — двухфакторная защита: Kaspi отправил код на эту почту;
+//      { su }           — у логина несколько магазинов/сотрудников, Kaspi просит
+//                         выбрать ({ _s_m } / { _s_u }) — здесь не поддержано.
+//   3. Код с почты: POST /api/p/login { _m_c, _r_d, _u: email из шага 2 }.
+//      НЕ { _c }: это поле только для кода из SMS после телефона — на него
+//      Kaspi и отвечал 401 {"errorCode":"FAILED"}.
+//   4. Новый код: POST /api/p/mfa/send.
+// Пароль нигде не хранится: шагу кода он не нужен.
+
+// «Запомнить устройство» — как галочка на форме Kaspi: реже просит код
+const REMEMBER_DEVICE = true;
+
+// Коды ошибок шага кода с почты → по-русски (как их показывает страница Kaspi)
+const MFA_CODE_ERRORS = {
+  SECURITY_CODE_INVALID: 'Kaspi: неверный код. Проверьте цифры из письма.',
+  MFA_CODE_INVALID: 'Kaspi: неверный код. Проверьте цифры из письма.',
+  TIMEOUT_EXCEEDED: 'Kaspi: код устарел. Запросите новый код.',
+  INACTIVE_CODE_ERROR: 'Kaspi: этот код уже не действует. Запросите новый код.',
+  MFA_CODE_ATTEMPT_LIMIT: 'Kaspi: попытки ввода кода закончились. Начните вход заново.',
+  MFA_SEND_FLOOD: 'Kaspi временно ограничил отправку кода — подождите и попробуйте снова.',
+  MFA_CODE_TOO_MANY_SEND: 'Kaspi временно ограничил отправку кода — подождите и попробуйте снова.',
+  FAILED: 'Kaspi не принял код (FAILED). Начните вход заново.',
+};
+// После этих ошибок тот же вход ещё жив — можно ввести другой код
+const MFA_RETRYABLE = new Set(['SECURITY_CODE_INVALID', 'MFA_CODE_INVALID']);
+
+const waitNote = (data) => {
+  const sec = Number(data?.errorData?.breakTimeSeconds) || null;
+  return sec ? ` (подождите ${sec} сек)` : '';
+};
+
 export const startPasswordLogin = async (rawEmail, password) => {
   const email = String(rawEmail || '')
     .trim()
@@ -229,7 +255,10 @@ export const startPasswordLogin = async (rawEmail, password) => {
   if (!password) throw new CabinetError(400, 'Введите пароль кабинета продавца');
 
   let jar = (await walkRedirects(kickoffUrl(), {})).jar;
-  const r = await call(jar, 'POST', CABINET_LOGIN_URL, { headers: idmcHeaders(), json: { _u: email, _p: password } });
+  const r = await call(jar, 'POST', CABINET_LOGIN_URL, {
+    headers: idmcHeaders(),
+    json: { _u: email, _p: password, _r_d: REMEMBER_DEVICE },
+  });
   jar = r.jar;
   const diag = [diagnose('e-mail и пароль', r.status, r.data)];
   console.log('[cabinet] пароль:', JSON.stringify(diag));
@@ -241,82 +270,76 @@ export const startPasswordLogin = async (rawEmail, password) => {
       { diag },
     );
   }
-  // Двухфакторная защита: пароль принят, ждут код (SMS или письмо)
-  const mfa = mfaChallenge(r.data);
-  if (mfa) {
-    const flood = mfa.code === 'MFA_SEND_FLOOD';
-    return {
-      needCode: true,
-      message: flood
-        ? `Kaspi временно ограничил отправку кода${mfa.waitSeconds ? ` (подождите ${mfa.waitSeconds} сек)` : ''}. Введите код, который уже приходил.`
-        : 'Kaspi отправил код подтверждения — введите его.',
-      // mfaDiag — что Kaspi ответил на пароль (без секретов): в errorData может
-      // быть то, что нужно вернуть вместе с кодом; покажем при ошибке кода
-      pending: { jar, login: email, password, mfa: mfa.code, mfaDiag: diag[0], at: Date.now() },
-    };
-  }
   if (!r.ok) {
+    const code = r.data && typeof r.data === 'object' ? r.data.errorCode : null;
+    if (code === 'MFA_SEND_FLOOD' || code === 'MFA_CODE_TOO_MANY_SEND') {
+      throw new CabinetError(400, `Kaspi временно ограничил отправку кода${waitNote(r.data)}. Попробуйте позже.`, {
+        diag,
+      });
+    }
     throw new CabinetError(
       r.status === 400 || r.status === 401 || r.status === 403 ? 401 : 502,
       errorFromBody(r.data, 'Kaspi не принял e-mail или пароль') +
-        (r.data?.errorCode === 'CREDENTIALS_INVALID'
+        (code === 'CREDENTIALS_INVALID'
           ? '. Проверьте, что с ними открывается kaspi.kz/mc. Не повторяйте много раз подряд — Kaspi может временно закрыть вход.'
           : ''),
       { diag },
     );
   }
 
-  // Пароль принят — обмениваем авторизацию на рабочие cookie кабинета
-  jar = (await walkRedirects(kickoffUrl(), jar)).jar;
-  try {
-    const { merchants, jar: finalJar } = await getMerchants(jar);
-    return { jar: finalJar, merchants };
-  } catch (err) {
-    if (err instanceof CabinetError && err.status === 401) {
-      // Кабинет ещё закрыт — Kaspi ждёт код подтверждения
-      return {
-        needCode: true,
-        message: 'Kaspi отправил код подтверждения — введите его.',
-        // Пароль принят ответом 200 — idmc вход запомнил, код пойдёт один, как после телефона
-        pending: { jar, login: email, at: Date.now() },
-      };
-    }
-    throw err;
+  const data = r.data && typeof r.data === 'object' ? r.data : {};
+  // Двухфакторная защита: код ушёл на почту, Kaspi вернул её (возможно, со
+  // звёздочками) — шагу кода её и отдаём, как страница Kaspi
+  if (data.email) {
+    return {
+      needCode: true,
+      message: `Kaspi отправил код на ${data.email} — введите его.`,
+      pending: { jar, mfaUser: String(data.email), at: Date.now() },
+    };
   }
+  if (data.su) {
+    throw new CabinetError(
+      409,
+      'Kaspi просит выбрать магазин или сотрудника для этого логина — так вход по e-mail пока не умеет. Войдите по телефону.',
+      { diag },
+    );
+  }
+
+  // Вход готов — обмениваем авторизацию на рабочие cookie кабинета
+  jar = (await walkRedirects(kickoffUrl(), jar)).jar;
+  const { merchants, jar: finalJar } = await getMerchants(jar);
+  return { jar: finalJar, merchants };
 };
 
-// Шаг 2: код из SMS → рабочая сессия кабинета.
+// Шаг 2: код → рабочая сессия кабинета. После телефона — код из SMS ({ _c }),
+// после пароля — код с почты ({ _m_c, _r_d, _u }), см. startPasswordLogin.
 export const confirmCode = async (pending, rawCode) => {
   const code = String(rawCode || '').replace(/\D/g, '');
-  if (code.length < 4) throw new CabinetError(400, 'Введите код из SMS (обычно 4–6 цифр)');
+  if (code.length < 4) throw new CabinetError(400, 'Введите код подтверждения (обычно 4–6 цифр)');
   if (!pending || !pending.jar) throw new CabinetError(400, 'Сессия входа не найдена — начните вход заново.');
   if (Date.now() - (pending.at || 0) > CODE_TTL_MS) {
     throw new CabinetError(408, 'Сессия входа устарела — начните вход заново, Kaspi пришлёт новый код.');
   }
 
   let jar = pending.jar;
-  // После пароля код идёт вместе с логином и паролем (см. startPasswordLogin),
-  // после телефона — один: номер Kaspi уже запомнил.
-  const byPassword = Boolean(pending.mfa && pending.login && pending.password);
-  const body = byPassword ? { _u: pending.login, _p: pending.password, _c: code } : { _c: code };
+  const byEmail = Boolean(pending.mfaUser);
+  const body = byEmail ? { _m_c: code, _r_d: REMEMBER_DEVICE, _u: pending.mfaUser } : { _c: code };
   const r = await call(jar, 'POST', CABINET_LOGIN_URL, { headers: idmcHeaders(), json: body });
   jar = r.jar;
-  const diag = [...(pending.mfaDiag ? [pending.mfaDiag] : []), diagnose('код', r.status, r.data)];
+  const diag = [diagnose('код', r.status, r.data)];
   console.log('[cabinet] код:', JSON.stringify(diag));
 
   if (!r.ok) {
-    // Новый запрос кода после пароля: Kaspi снова ответил MFA_* — значит, код
-    // не подошёл, но вход ещё жив, можно ввести другой
-    const again = byPassword ? mfaChallenge(r.data) : null;
-    const generic = r.data && typeof r.data === 'object' && r.data.errorCode === 'FAILED';
+    const errCode = r.data && typeof r.data === 'object' ? r.data.errorCode : null;
+    const known = byEmail && errCode ? MFA_CODE_ERRORS[errCode] : null;
+    // Неверный код — тот же вход жив, pending прежний (cookie могли обновиться)
+    const retry = byEmail && MFA_RETRYABLE.has(errCode);
     throw new CabinetError(
       r.status === 400 || r.status === 401 || r.status === 403 ? 401 : 502,
-      again
-        ? 'Kaspi не принял код. Проверьте цифры — или начните вход заново, Kaspi пришлёт новый код.'
-        : generic
-          ? 'Kaspi не принял код (FAILED). Начните вход заново и введите новый код — старый после неудачной попытки уже не действует.'
-          : errorFromBody(r.data, 'Kaspi не принял код. Проверьте цифры или начните вход заново для нового кода.'),
-      { diag, needCode: true, pending: { ...pending } },
+      known
+        ? `${known}${errCode === 'MFA_SEND_FLOOD' || errCode === 'MFA_CODE_TOO_MANY_SEND' ? waitNote(r.data) : ''}`
+        : errorFromBody(r.data, 'Kaspi не принял код. Проверьте цифры или начните вход заново для нового кода.'),
+      { diag, needCode: true, pending: retry ? { ...pending, jar } : { ...pending } },
     );
   }
 
