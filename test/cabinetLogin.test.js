@@ -119,23 +119,35 @@ const fakeKaspi = (req, res) => {
         res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'MS_AUTH_SSO=sso2; Path=/' });
         return res.end(JSON.stringify({ phone: j._ph }));
       }
+      // Код с почты после пароля: { _m_c, _r_d, _u: почта из ответа на пароль }
+      // — как на живой странице входа idmc (js/main.js, 2026-10)
+      if (j._m_c !== undefined) {
+        if (j._u !== 'o***r@shop.kz' || !/MS_AUTH_SSO=sso-mfa/.test(cookie)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ errorCode: 'FAILED' }));
+        }
+        if (j._m_c !== '112233') {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ errorCode: 'SECURITY_CODE_INVALID' }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-auth=1; Path=/; HttpOnly' });
+        return res.end(JSON.stringify({ redirectUrl: '/' }));
+      }
       // Вход по e-mail и паролю: _u/_p
       if (j._u !== undefined) {
         if (j._u !== 'owner@shop.kz' || j._p !== 'Secret123') {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ errorCode: 'CREDENTIALS_INVALID', message: 'Неверный логин или пароль' }));
         }
-        // Двухфакторная защита: ответ на пароль — ошибка MFA_REQUIRED, вход
-        // НЕ запоминается. Код принимается только вместе с логином и паролем.
+        // Двухфакторная защита — как живой Kaspi: 200 и почта (со звёздочками),
+        // на которую ушёл код. Вход запоминается в MS_AUTH_SSO.
         if (mode === 'pw-mfa') {
-          if (j._c === undefined) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ errorCode: 'MFA_REQUIRED' }));
-          }
-          if (j._c !== '112233') {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ errorCode: 'MFA_CODE_INVALID' }));
-          }
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'MS_AUTH_SSO=sso-mfa; Path=/' });
+          return res.end(JSON.stringify({ email: 'o***r@shop.kz' }));
+        }
+        if (mode === 'pw-su') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ su: true }));
         }
         res.writeHead(200, { 'Content-Type': 'application/json', 'Set-Cookie': 'mc-auth=1; Path=/; HttpOnly' });
         return res.end(JSON.stringify({ redirectUrl: '/' }));
@@ -282,38 +294,46 @@ describe('POST /api/market/cabinet/* (phone + SMS)', () => {
     assert.match(r.body.error, /неверный логин или пароль/i);
   });
 
-  it('e-mail и пароль: Kaspi просит код — код уходит вместе с логином и паролем', async () => {
+  it('e-mail и пароль: код с почты уходит как { _m_c, _r_d, _u }, пароль не хранится', async () => {
     mode = 'pw-mfa';
     const r = await post('/api/market/cabinet/login', { email: 'owner@shop.kz', password: 'Secret123' });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.needCode, true);
-    // Пароль лежит в pending только запечатанным
-    assert.ok(!r.body.mcPending.includes('Secret123'));
-    assert.throws(() => JSON.parse(Buffer.from(r.body.mcPending, 'base64').toString('utf8')));
+    assert.match(r.body.message, /o\*\*\*r@shop\.kz/);
+    const pw = JSON.parse(seen.filter((s) => s.path === '/api/p/login').pop().body);
+    assert.deepEqual(pw, { _u: 'owner@shop.kz', _p: 'Secret123', _r_d: true });
+    // Пароль шагу кода не нужен — в pending его нет вовсе
+    const { unseal } = await import('../src/marketplace/auth.js');
+    assert.equal(unseal(r.body.mcPending).password, undefined);
 
-    // Неверный код: Kaspi снова просит код — понятная ошибка, вход жив
+    // Неверный код: понятная ошибка, тот же вход жив — можно ввести другой
     const bad = await post('/api/market/cabinet/confirm-code', { mcPending: r.body.mcPending, code: '000000' });
     assert.equal(bad.status, 401);
-    assert.match(bad.body.error, /не принял код/);
+    assert.match(bad.body.error, /неверный код/);
 
     const ok = await post('/api/market/cabinet/confirm-code', { mcPending: r.body.mcPending, code: '112233' });
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     assert.equal(ok.body.merchantUid, '30322035');
     const sent = JSON.parse(seen.filter((s) => s.path === '/api/p/login').pop().body);
-    assert.deepEqual(sent, { _u: 'owner@shop.kz', _p: 'Secret123', _c: '112233' });
+    assert.deepEqual(sent, { _m_c: '112233', _r_d: true, _u: 'o***r@shop.kz' });
   });
 
-  it('голый код без шага телефона Kaspi не принимает (FAILED) — подсказываем начать заново', async () => {
+  it('e-mail: код как после телефона ({ _c }) Kaspi не принимает — так и было FAILED', async () => {
     mode = 'pw-mfa';
     const r = await post('/api/market/cabinet/login', { email: 'owner@shop.kz', password: 'Secret123' });
-    // Старый pending без пароля — как выдавала прежняя версия моста
     const { seal, unseal } = await import('../src/marketplace/auth.js');
-    const { password, ...old } = unseal(r.body.mcPending);
-    assert.equal(password, 'Secret123');
-    const res = await post('/api/market/cabinet/confirm-code', { mcPending: seal(old), code: '112233' });
+    const { mfaUser, ...asPhone } = unseal(r.body.mcPending);
+    assert.equal(mfaUser, 'o***r@shop.kz');
+    const res = await post('/api/market/cabinet/confirm-code', { mcPending: seal(asPhone), code: '112233' });
     assert.equal(res.status, 401);
-    assert.match(res.body.error, /FAILED/);
-    assert.match(res.body.error, /Начните вход заново/);
+    assert.equal(JSON.parse(seen.filter((s) => s.path === '/api/p/login').pop().body)._c, '112233');
+  });
+
+  it('e-mail: Kaspi просит выбрать магазин (su) — понятная ошибка, не зависаем', async () => {
+    mode = 'pw-su';
+    const r = await post('/api/market/cabinet/login', { email: 'owner@shop.kz', password: 'Secret123' });
+    assert.equal(r.status, 409);
+    assert.match(r.body.error, /Войдите по телефону/);
   });
 
   it('e-mail без @ не уходит в Kaspi', async () => {
