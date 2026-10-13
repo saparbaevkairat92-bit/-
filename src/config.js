@@ -79,10 +79,24 @@ export const KASPI_QRPAY_URL = 'https://qrpay.kaspi.kz';
 // ─── App version & device constants ───
 // Defaults match a known-good Kaspi Pay client. Override via .env if needed.
 // ⚠️ The Kaspi API validates these parameters and may reject unknown values.
+//
+// Версия и сборка сверены с настоящим приложением Kaspi Pay на iPhone
+// (Настройки iOS → Kaspi Pay → Version: «26.1005 (1128)»). Раньше здесь стояло
+// 4.112.1 (1107): Kaspi сменил саму нумерацию версий (26.x — по году), и
+// клиенту со старой версией он перестал присылать SMS с кодом входа, хотя
+// настоящее приложение с тем же номером код получало.
+//
+// Когда снова перестанет приходить SMS при живом номере — первым делом сверить
+// эти две цифры с приложением на телефоне и обновить (или задать APP_VERSION /
+// APP_BUILD в переменных окружения, без новой сборки).
+//
+// Версию iOS (platformVer / cfNetwork / darwin) не трогаем по отдельности:
+// эти три значения должны соответствовать друг другу, иначе «устройство»
+// выглядит несогласованным.
 
 export const APP = {
-  version: process.env.APP_VERSION || '4.112.1',
-  build: process.env.APP_BUILD || '1107',
+  version: process.env.APP_VERSION || '26.1005',
+  build: process.env.APP_BUILD || '1128',
   platform: process.env.APP_PLATFORM || 'iOS',
   platformVer: process.env.APP_PLATFORM_VER || '18.4',
   locale: process.env.APP_LOCALE || 'ru-RU',
